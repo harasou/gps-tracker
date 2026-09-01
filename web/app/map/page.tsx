@@ -11,11 +11,15 @@ const MAX_POINTS = 2000;
 
 // 日付は JST(日本時間)の暦日として解釈する。保存は UTC なので境界を変換する。
 const TZ = "Asia/Tokyo";
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // n 日前の JST 暦日を "YYYY-MM-DD" で返す。
 function jstDay(daysAgo: number): string {
-  const d = new Date(Date.now() - daysAgo * 86_400_000);
-  // en-CA ロケールは YYYY-MM-DD 形式
+  return fmtDay(new Date(Date.now() - daysAgo * 86_400_000));
+}
+
+// Date を JST 暦日 "YYYY-MM-DD" に整形(en-CA ロケールは YYYY-MM-DD)。
+function fmtDay(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
     year: "numeric",
@@ -24,33 +28,34 @@ function jstDay(daysAgo: number): string {
   }).format(d);
 }
 
-// "YYYY-MM-DD"(JST) → その日の 00:00:00 JST を UTC ISO8601 に。
-function jstStartIso(day: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
-  const t = Date.parse(`${day}T00:00:00+09:00`);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
+// "YYYY-MM-DD" から delta 日ずらした JST 暦日を返す。
+function shiftDay(day: string, delta: number): string {
+  // 正午 JST を基準にすることで DST 等の境界ズレを避ける。
+  const t = Date.parse(`${day}T12:00:00+09:00`);
+  return fmtDay(new Date(t + delta * 86_400_000));
 }
 
-// "YYYY-MM-DD"(JST) → その日の 23:59:59.999 JST を UTC ISO8601 に。
-function jstEndIso(day: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
-  const t = Date.parse(`${day}T23:59:59.999+09:00`);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
+// 選択日の曜日(月〜日)を返す。
+function weekdayJa(day: string): string {
+  const t = Date.parse(`${day}T12:00:00+09:00`);
+  return new Intl.DateTimeFormat("ja-JP", { timeZone: TZ, weekday: "short" }).format(
+    new Date(t),
+  );
 }
 
 async function fetchPoints(
   deviceId: string | undefined,
-  fromDay: string | undefined,
-  toDay: string | undefined,
+  day: string | undefined,
 ): Promise<LocationPoint[]> {
   let query: Query = db.collection(LOCATIONS_COLLECTION);
 
   if (deviceId) query = query.where("deviceId", "==", deviceId);
 
-  const fromIso = fromDay ? jstStartIso(fromDay) : null;
-  const toIso = toDay ? jstEndIso(toDay) : null;
-  if (fromIso) query = query.where("recordedAt", ">=", fromIso);
-  if (toIso) query = query.where("recordedAt", "<=", toIso);
+  if (day && DAY_RE.test(day)) {
+    const fromIso = new Date(Date.parse(`${day}T00:00:00.000+09:00`)).toISOString();
+    const toIso = new Date(Date.parse(`${day}T23:59:59.999+09:00`)).toISOString();
+    query = query.where("recordedAt", ">=", fromIso).where("recordedAt", "<=", toIso);
+  }
 
   query = query.orderBy("recordedAt", "desc").limit(MAX_POINTS);
 
@@ -70,15 +75,10 @@ async function fetchPoints(
   return points;
 }
 
-// プリセットのリンク先を組み立てる(deviceId は引き継ぐ)。
-function presetHref(
-  from: string,
-  to: string,
-  deviceId: string | undefined,
-): string {
+// リンク先を組み立てる(deviceId は引き継ぐ)。day 未指定なら全期間。
+function dayHref(day: string, deviceId: string | undefined): string {
   const p = new URLSearchParams();
-  if (from) p.set("from", from);
-  if (to) p.set("to", to);
+  if (day) p.set("date", day);
   if (deviceId) p.set("deviceId", deviceId);
   const qs = p.toString();
   return qs ? `/map?${qs}` : "/map";
@@ -87,21 +87,17 @@ function presetHref(
 export default async function MapPage({
   searchParams,
 }: {
-  searchParams: Promise<{ deviceId?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ deviceId?: string; date?: string }>;
 }) {
-  const { deviceId, from, to } = await searchParams;
+  const { deviceId, date } = await searchParams;
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
-  const points = await fetchPoints(deviceId, from, to);
+  const day = date && DAY_RE.test(date) ? date : undefined;
+  const points = await fetchPoints(deviceId, day);
 
   const today = jstDay(0);
-  const presets = [
-    { label: "今日", from: today, to: today },
-    { label: "過去7日", from: jstDay(6), to: today },
-    { label: "過去30日", from: jstDay(29), to: today },
-  ];
+  const yesterday = jstDay(1);
 
-  const rangeLabel =
-    from || to ? `${from ?? "…"} 〜 ${to ?? "…"}（JST）` : "全期間(直近)";
+  const rangeLabel = day ? `${day}（${weekdayJa(day)}）` : "全期間(直近)";
 
   return (
     <main className="flex h-dvh flex-col">
@@ -114,54 +110,63 @@ export default async function MapPage({
           </span>
         </div>
 
-        {/* 日付フィルタ: JS 不要のプレーンな GET フォーム */}
-        <form method="get" className="mt-2 flex flex-wrap items-end gap-2 text-sm">
-          {deviceId ? (
-            <input type="hidden" name="deviceId" value={deviceId} />
-          ) : null}
-          <label className="flex flex-col">
-            <span className="text-xs text-neutral-500">開始日</span>
-            <input
-              type="date"
-              name="from"
-              defaultValue={from ?? ""}
-              className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-          </label>
-          <label className="flex flex-col">
-            <span className="text-xs text-neutral-500">終了日</span>
-            <input
-              type="date"
-              name="to"
-              defaultValue={to ?? ""}
-              className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-          </label>
-          <button
-            type="submit"
-            className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
+        {/* 日付フィルタ: JS 不要のプレーンな GET フォーム。date 入力はネイティブのカレンダーを開く。 */}
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          {/* 前日 */}
+          <a
+            href={dayHref(shiftDay(day ?? today, -1), deviceId)}
+            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            aria-label="前日"
           >
-            表示
-          </button>
+            ◀ 前日
+          </a>
+
+          <form method="get" className="flex items-center gap-2">
+            {deviceId ? <input type="hidden" name="deviceId" value={deviceId} /> : null}
+            <input
+              type="date"
+              name="date"
+              defaultValue={day ?? today}
+              className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <button
+              type="submit"
+              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
+            >
+              表示
+            </button>
+          </form>
+
+          {/* 翌日 */}
+          <a
+            href={dayHref(shiftDay(day ?? today, 1), deviceId)}
+            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            aria-label="翌日"
+          >
+            翌日 ▶
+          </a>
 
           <span className="mx-1 text-neutral-300 dark:text-neutral-700">|</span>
 
-          {presets.map((p) => (
-            <a
-              key={p.label}
-              href={presetHref(p.from, p.to, deviceId)}
-              className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
-              {p.label}
-            </a>
-          ))}
           <a
-            href={presetHref("", "", deviceId)}
+            href={dayHref(today, deviceId)}
+            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+          >
+            今日
+          </a>
+          <a
+            href={dayHref(yesterday, deviceId)}
+            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+          >
+            昨日
+          </a>
+          <a
+            href={dayHref("", deviceId)}
             className="rounded px-2 py-1.5 text-neutral-500 underline hover:text-neutral-700 dark:hover:text-neutral-300"
           >
-            クリア
+            全期間
           </a>
-        </form>
+        </div>
       </header>
 
       {!apiKey ? (
@@ -170,7 +175,7 @@ export default async function MapPage({
         </div>
       ) : points.length === 0 ? (
         <div className="p-6 text-neutral-500">
-          この期間の位置情報がありません。日付を変えるか「クリア」で全期間表示にしてください。
+          この日の位置情報がありません。日付を変えるか「全期間」で直近を表示してください。
         </div>
       ) : (
         <MapView apiKey={apiKey} points={points} />

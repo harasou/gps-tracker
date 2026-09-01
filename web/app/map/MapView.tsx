@@ -130,23 +130,6 @@ export default function MapView({
           });
         }
 
-        // 始点 S / 終点 E。
-        const makePin = (p: LocationPoint, index: number, label: string) => {
-          const pin = new g.maps.Marker({
-            position: { lat: p.lat, lng: p.lng },
-            map,
-            title: `${label === "S" ? "始点" : "終点"} ${jstTime(p.recordedAt)}（JST）`,
-            label,
-            zIndex: 1000,
-          });
-          pin.addListener("click", () => {
-            info.setContent(popupHtml(p, index, points.length));
-            info.open({ map, anchor: pin });
-          });
-        };
-        makePin(points[0], 0, "S");
-        makePin(points[points.length - 1], points.length - 1, "E");
-
         // スクラバーの現在位置を示す赤い大きめマーカー。
         cursorMarkerRef.current = new g.maps.Marker({
           position: last,

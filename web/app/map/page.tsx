@@ -2,6 +2,7 @@ import type { Query } from "firebase-admin/firestore";
 import { db, LOCATIONS_COLLECTION } from "@/lib/firebaseAdmin";
 import type { LocationPoint } from "@/lib/types";
 import MapView from "./MapView";
+import DateInput from "./DateInput";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -102,13 +103,12 @@ export default async function MapPage({
 }) {
   const { deviceId, date } = await searchParams;
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
-  const day = date && DAY_RE.test(date) ? date : undefined;
+  const today = jstDay(0);
+  // 日付未指定なら今日を表示する。
+  const day = date && DAY_RE.test(date) ? date : today;
   const { points, noFixCount } = await fetchPoints(deviceId, day);
 
-  const today = jstDay(0);
-  const yesterday = jstDay(1);
-
-  const rangeLabel = day ? `${day}（${weekdayJa(day)}）` : "全期間(直近)";
+  const rangeLabel = `${day}（${weekdayJa(day)}）`;
 
   return (
     <main className="flex h-dvh flex-col">
@@ -122,61 +122,33 @@ export default async function MapPage({
           </span>
         </div>
 
-        {/* 日付フィルタ: JS 不要のプレーンな GET フォーム。date 入力はネイティブのカレンダーを開く。 */}
+        {/* 日付フィルタ。date 入力はネイティブのカレンダーを開き、選ぶと即反映。 */}
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
           {/* 前日 */}
           <a
-            href={dayHref(shiftDay(day ?? today, -1), deviceId)}
+            href={dayHref(shiftDay(day, -1), deviceId)}
             className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
             aria-label="前日"
           >
             ◀ 前日
           </a>
 
-          <form method="get" className="flex items-center gap-2">
-            {deviceId ? <input type="hidden" name="deviceId" value={deviceId} /> : null}
-            <input
-              type="date"
-              name="date"
-              defaultValue={day ?? today}
-              className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-            <button
-              type="submit"
-              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
-            >
-              表示
-            </button>
-          </form>
+          <DateInput current={day} deviceId={deviceId} />
 
           {/* 翌日 */}
           <a
-            href={dayHref(shiftDay(day ?? today, 1), deviceId)}
+            href={dayHref(shiftDay(day, 1), deviceId)}
             className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
             aria-label="翌日"
           >
             翌日 ▶
           </a>
 
-          <span className="mx-1 text-neutral-300 dark:text-neutral-700">|</span>
-
           <a
             href={dayHref(today, deviceId)}
             className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
           >
             今日
-          </a>
-          <a
-            href={dayHref(yesterday, deviceId)}
-            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            昨日
-          </a>
-          <a
-            href={dayHref("", deviceId)}
-            className="rounded px-2 py-1.5 text-neutral-500 underline hover:text-neutral-700 dark:hover:text-neutral-300"
-          >
-            全期間
           </a>
         </div>
       </header>

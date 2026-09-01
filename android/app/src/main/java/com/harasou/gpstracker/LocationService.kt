@@ -18,6 +18,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -37,6 +38,9 @@ class LocationService : LifecycleService() {
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var uploader: Uploader
 
+    // 記録ループは常に 1 つだけ。onStartCommand が複数回呼ばれても二重起動させない。
+    private var loopJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         fused = LocationServices.getFusedLocationProviderClient(this)
@@ -54,8 +58,10 @@ class LocationService : LifecycleService() {
         }
 
         startForegroundCompat()
-        // 記録ループを開始する。lifecycleScope なので onDestroy で自動キャンセルされる。
-        lifecycleScope.launch { recordLoop() }
+        // 既存ループがあればキャンセルし、必ず 1 つだけ起動する。
+        // (再スタート時に最新の設定を読み直す意味も兼ねる)
+        loopJob?.cancel()
+        loopJob = lifecycleScope.launch { recordLoop() }
         return START_STICKY
     }
 

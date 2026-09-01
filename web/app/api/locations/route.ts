@@ -131,6 +131,9 @@ export async function POST(req: NextRequest) {
   const errors: { index: number; reason: string }[] = [];
   const batch = db.batch();
   const col = db.collection(LOCATIONS_COLLECTION);
+  // 同一バッチ内で同じドキュメント ID を 2 回書くと Firestore がエラーになるため、
+  // このリクエスト内で使った ID を覚えて重複はスキップする。
+  const seenDocIds = new Set<string>();
   let accepted = 0;
 
   rawPoints.forEach((raw, index) => {
@@ -139,7 +142,15 @@ export async function POST(req: NextRequest) {
       errors.push({ index, reason: result.reason });
       return;
     }
-    batch.set(col.doc(), {
+    // ドキュメント ID を deviceId + recordedAt から決定的に作る(冪等化)。
+    // 同じ点が二重ループや再送で複数回届いても、同じ ID に上書きされるだけで
+    // 重複ドキュメントにならない。Firestore の ID 制約に触れる文字は置換する。
+    const docId = `${deviceId}_${result.value.recordedAt}`
+      .replace(/\//g, "_")
+      .slice(0, 400);
+    if (seenDocIds.has(docId)) return; // 同一リクエスト内の重複はスキップ
+    seenDocIds.add(docId);
+    batch.set(col.doc(docId), {
       ...result.value,
       deviceId,
       createdAt,

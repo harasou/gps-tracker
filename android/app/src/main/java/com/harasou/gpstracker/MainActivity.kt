@@ -60,7 +60,6 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
     var serverUrl by remember { mutableStateOf("") }
     var deviceToken by remember { mutableStateOf("") }
     var intervalSec by remember { mutableStateOf("60") }
-    var minDistanceM by remember { mutableStateOf("15") }
     var deviceId by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
@@ -71,7 +70,6 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
         serverUrl = s.serverUrl
         deviceToken = s.deviceToken
         intervalSec = s.intervalSec.toString()
-        minDistanceM = s.minDistanceM.toString()
         deviceId = s.deviceId
     }
 
@@ -131,15 +129,7 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
         OutlinedTextField(
             value = intervalSec,
             onValueChange = { intervalSec = it.filter { c -> c.isDigit() } },
-            label = { Text("記録間隔(秒)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = minDistanceM,
-            onValueChange = { minDistanceM = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("最小移動距離(m) — これ未満は記録しない") },
+            label = { Text("記録間隔(秒) — この間隔ごとに必ず送信") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
@@ -156,7 +146,6 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
                         serverUrl = serverUrl,
                         deviceToken = deviceToken,
                         intervalSec = intervalSec.toLongOrNull() ?: 60L,
-                        minDistanceM = minDistanceM.toDoubleOrNull() ?: 15.0,
                     )
                     deviceId = settingsRepo.settingsFlow.first().deviceId
                     status = "設定を保存しました。"
@@ -187,7 +176,6 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
                                     serverUrl = serverUrl,
                                     deviceToken = deviceToken,
                                     intervalSec = intervalSec.toLongOrNull() ?: 60L,
-                                    minDistanceM = minDistanceM.toDoubleOrNull() ?: 15.0,
                                 )
                                 LocationService.start(context)
                                 running = true

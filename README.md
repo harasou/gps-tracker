@@ -127,15 +127,15 @@ curl -X POST http://localhost:3000/api/locations \
 |------|------|
 | サーバ URL | `https://<デプロイ先>/api/locations` |
 | デバイストークン | `DEVICE_TOKEN` に登録したのと同じ値 |
-| 記録間隔(秒) | 例: 60 |
-| 最小移動距離(m) | 例: 15。前回からこの距離未満しか動いていなければ記録しない（滞在中のGPSノイズ抑制・保存量削減） |
+| 記録間隔(秒) | 例: 60。この間隔ごとに必ず 1 件送信する |
 
 「設定を保存」→「位置情報の権限をリクエスト」→「記録を開始」。
 画面を消してもバックグラウンドで記録し続けるには、端末の設定で位置情報を **「常に許可」** にする（Android 10 以降）。
 
 ### 記録の仕組み・注意
 
-- `FusedLocationProvider` の **間隔 + 最小移動距離** の両方で間引く。1 分間隔でも、停止中は点が増えない。
+- 前面サービスが **タイマーで能動的に現在地を要求**し、**間隔ごとに必ず 1 件送信**する（静止中でも送る）。
+- その時刻に測位できなかった場合は、座標なしの **「位置不明」レコード**（`locationAvailable:false`）を送る。ネットワークが生きていれば「位置は取れなかったが端末は動いていた」記録が残る。地図には描かず、地図ヘッダに「位置不明 N 件」と件数表示する。
 - 通信不能時は端末内（`buffer.jsonl`）にバッファし、次の送信成功時にまとめて送り直す。
 - 前面サービス（常駐通知）として動くため、OS に強制終了されにくい。
 
@@ -143,17 +143,34 @@ curl -X POST http://localhost:3000/api/locations \
 
 ## データモデル（Firestore `locations`）
 
+位置が取れたレコード:
+
 ```jsonc
 {
   "deviceId": "android-1a2b3c4d",
   "latitude": 35.681236,
   "longitude": 139.767125,
   "recordedAt": "2026-09-01T09:00:00.000Z", // 端末の記録時刻
+  "locationAvailable": true,
+  "hasLocation": true,                        // 地図描画対象
   "accuracy": 8.0,                            // 任意
   "altitude": 40.0,                           // 任意
   "speed": 1.2,                               // 任意
   "bearing": 90.0,                            // 任意
   "createdAt": "2026-09-01T09:00:01.123Z",   // サーバ受信時刻
+  "_serverTs": <serverTimestamp>
+}
+```
+
+測位できなかったレコード（座標なし・地図には描かない）:
+
+```jsonc
+{
+  "deviceId": "android-1a2b3c4d",
+  "recordedAt": "2026-09-01T09:01:00.000Z",
+  "locationAvailable": false,
+  "hasLocation": false,
+  "createdAt": "2026-09-01T09:01:01.000Z",
   "_serverTs": <serverTimestamp>
 }
 ```

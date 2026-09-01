@@ -37,24 +37,36 @@ class Uploader(context: Context) {
         timeZone = TimeZone.getTimeZone("UTC")
     }
 
-    /** Location を送信用 JSON に変換する。 */
+    /** 取得できた位置を送信用 JSON に変換する。 */
     private fun toJson(loc: Location): JSONObject = JSONObject().apply {
         put("latitude", loc.latitude)
         put("longitude", loc.longitude)
         put("recordedAt", iso8601.format(Date(loc.time)))
+        put("locationAvailable", true)
         if (loc.hasAccuracy()) put("accuracy", loc.accuracy.toDouble())
         if (loc.hasAltitude()) put("altitude", loc.altitude)
         if (loc.hasSpeed()) put("speed", loc.speed.toDouble())
         if (loc.hasBearing()) put("bearing", loc.bearing.toDouble())
     }
 
-    /**
-     * 1 点を送信する。まずバッファ済みの点を送り、続けて今回の点を送る。
-     * 失敗した点はバッファに退避する。
-     */
-    fun upload(settings: AppSettings, loc: Location) {
-        val point = toJson(loc)
+    /** 測位できなかった記録(座標なし)を送信用 JSON に変換する。 */
+    private fun noFixJson(timeMillis: Long): JSONObject = JSONObject().apply {
+        put("recordedAt", iso8601.format(Date(timeMillis)))
+        put("locationAvailable", false)
+    }
 
+    /** 取得できた位置を送信する。 */
+    fun upload(settings: AppSettings, loc: Location) = send(settings, toJson(loc))
+
+    /** 測位できなかった旨を送信する。 */
+    fun uploadNoFix(settings: AppSettings, timeMillis: Long) =
+        send(settings, noFixJson(timeMillis))
+
+    /**
+     * 1 レコードを送信する。まずバッファ済みを送り、続けて今回分を送る。
+     * 失敗したレコードはバッファに退避する。
+     */
+    private fun send(settings: AppSettings, point: JSONObject) {
         // まず溜まっている分を吐き出す。成功したら今回分も送る。
         val flushed = flushBuffer(settings)
         if (!flushed) {

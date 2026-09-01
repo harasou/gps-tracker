@@ -7,43 +7,35 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.location.Location
 import android.os.Build
-import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 前面サービスとして位置情報を購読し、取得ごとにサーバへ送信する。
- * FusedLocationProvider の interval と minUpdateDistance の両方で間引く。
+ * 前面サービスとして、一定間隔ごとに「必ず 1 件」記録を送る。
+ *
+ * - タイマーで能動的に現在地を要求する(測位イベント待ちの受動型ではない)。
+ * - 位置が取れたら座標付きで送信。取れなければ「位置不明」レコードを送る。
+ * - 送信できない(圏外等)ときは Uploader がバッファし、次回成功時に再送する。
  */
 class LocationService : LifecycleService() {
 
     private lateinit var fused: FusedLocationProviderClient
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var uploader: Uploader
-    private var settings: AppSettings? = null
-
-    private val locationCallback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            val s = settings ?: return
-            for (loc in result.locations) {
-                // 送信はブロッキングなので IO ディスパッチャで実行する。
-                lifecycleScope.launch(Dispatchers.IO) {
-                    uploader.upload(s, loc)
-                }
-            }
-        }
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -62,35 +54,53 @@ class LocationService : LifecycleService() {
         }
 
         startForegroundCompat()
-
-        // 最新の設定を読んでから位置購読を開始する。
-        lifecycleScope.launch {
-            val s = settingsRepo.current()
-            settings = s
-            startLocationUpdates(s)
-        }
-
-        // 強制終了されても復帰させる。
+        // 記録ループを開始する。lifecycleScope なので onDestroy で自動キャンセルされる。
+        lifecycleScope.launch { recordLoop() }
         return START_STICKY
     }
 
-    @Suppress("MissingPermission")
-    private fun startLocationUpdates(s: AppSettings) {
-        val intervalMs = s.intervalSec * 1000L
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
-            // 端末側でも最短間隔を守る
-            .setMinUpdateIntervalMillis(intervalMs)
-            // 前回からこの距離未満の変化は通知しない(滞在中のノイズ抑制)
-            .setMinUpdateDistanceMeters(s.minDistanceM.toFloat())
-            .setWaitForAccurateLocation(false)
-            .build()
+    /** 間隔ごとに 1 件送るループ。delay はキャンセル時に例外で抜ける。 */
+    private suspend fun recordLoop() {
+        val s = settingsRepo.current()
+        val intervalMs = (s.intervalSec.coerceAtLeast(1)) * 1000L
+        // 測位待ちの上限。間隔より短くして、間隔内に必ず何か送れるようにする。
+        val fixTimeoutMs = minOf(intervalMs, 30_000L)
+        Log.i(TAG, "記録ループ開始 interval=${s.intervalSec}s fixTimeout=${fixTimeoutMs}ms")
 
-        try {
-            fused.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
-            Log.i(TAG, "位置購読開始 interval=${s.intervalSec}s minDist=${s.minDistanceM}m")
+        while (true) {
+            tick(s, fixTimeoutMs)
+            delay(intervalMs)
+        }
+    }
+
+    /** 1 回分: 現在地を要求し、取れたら座標付き・取れなければ位置不明として送る。 */
+    private suspend fun tick(s: AppSettings, fixTimeoutMs: Long) {
+        val loc: Location? = requestLocation(fixTimeoutMs)
+        withContext(Dispatchers.IO) {
+            if (loc != null) {
+                uploader.upload(s, loc)
+            } else {
+                uploader.uploadNoFix(s, System.currentTimeMillis())
+            }
+        }
+    }
+
+    /** 現在地を 1 回要求する。タイムアウト/失敗/測位不能なら null。 */
+    private suspend fun requestLocation(fixTimeoutMs: Long): Location? {
+        val cts = CancellationTokenSource()
+        return try {
+            withTimeoutOrNull(fixTimeoutMs) {
+                fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token).await()
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "位置情報の権限がありません", e)
             stopSelf()
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "測位に失敗: ${e.message}")
+            null
+        } finally {
+            cts.cancel()
         }
     }
 
@@ -133,8 +143,7 @@ class LocationService : LifecycleService() {
     }
 
     override fun onDestroy() {
-        fused.removeLocationUpdates(locationCallback)
-        Log.i(TAG, "位置購読停止")
+        Log.i(TAG, "記録ループ停止")
         super.onDestroy()
     }
 

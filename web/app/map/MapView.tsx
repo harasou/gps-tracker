@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
 
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
@@ -36,6 +36,58 @@ function jstTime(iso: string): string {
   }).format(new Date(iso));
 }
 
+// "HH:mm"(JST)。
+function jstHM(iso: string): string {
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+function fmtDuration(ms: number): string {
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min}分`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}時間${m}分` : `${h}時間`;
+}
+
+// 記録が飛んでいる区間(前後の点の時間差が通常より大きい)。
+interface Gap {
+  fromIdx: number;
+  toIdx: number;
+  ms: number;
+  fromTime: string;
+  toTime: string;
+}
+
+// 連続2点の時間差が「中央値×3」かつ「最低3分」を超えたら記録なしとみなす。
+function detectGaps(points: LocationPoint[]): Gap[] {
+  if (points.length < 3) return [];
+  const times = points.map((p) => Date.parse(p.recordedAt));
+  const deltas: number[] = [];
+  for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1]);
+  const sorted = [...deltas].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 60000;
+  const threshold = Math.max(median * 3, 180_000);
+
+  const gaps: Gap[] = [];
+  for (let i = 1; i < times.length; i++) {
+    const d = times[i] - times[i - 1];
+    if (d > threshold) {
+      gaps.push({
+        fromIdx: i - 1,
+        toIdx: i,
+        ms: d,
+        fromTime: points[i - 1].recordedAt,
+        toTime: points[i].recordedAt,
+      });
+    }
+  }
+  return gaps;
+}
+
 function popupHtml(p: LocationPoint, index: number, total: number): string {
   const acc = p.accuracy !== undefined ? `<br>精度 約${Math.round(p.accuracy)}m` : "";
   return `<div style="font-size:12px;line-height:1.5">🕐 <b>${jstTime(
@@ -51,13 +103,14 @@ export default function MapView({
   points: LocationPoint[];
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const gRef = useRef<typeof google | null>(null);
   const mapObjRef = useRef<google.maps.Map | null>(null);
   const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
   const travelledRef = useRef<google.maps.Polyline | null>(null);
   const [error, setError] = useState<string | null>(null);
   // タイムラインスクラバーの現在位置(点のインデックス)。初期は末尾(最新)。
   const [cursor, setCursor] = useState<number>(points.length - 1);
+
+  const gaps = useMemo(() => detectGaps(points), [points]);
 
   // 表示対象が変わったらカーソルを末尾へ戻す。
   useEffect(() => {
@@ -72,7 +125,6 @@ export default function MapView({
       .then(() => {
         if (cancelled || !mapRef.current) return;
         const g = (window as unknown as { google: typeof google }).google;
-        gRef.current = g;
 
         const path = points.map((p) => ({ lat: p.lat, lng: p.lng }));
         const last = path[path.length - 1];
@@ -85,7 +137,7 @@ export default function MapView({
         });
         mapObjRef.current = map;
 
-        // 全体の軌跡(薄い青)。未通過ぶんの下地になる。
+        // 全体の軌跡(薄い青)。
         new g.maps.Polyline({
           path,
           geodesic: true,
@@ -95,7 +147,7 @@ export default function MapView({
           map,
         });
 
-        // 通過済みの軌跡(濃い青)。スクラバーで長さが変わる。初期は全区間。
+        // 通過済みの軌跡(濃い青)。スクラバーで長さが変わる。
         travelledRef.current = new g.maps.Polyline({
           path,
           geodesic: true,
@@ -103,6 +155,31 @@ export default function MapView({
           strokeOpacity: 0.9,
           strokeWeight: 4,
           map,
+        });
+
+        // 記録なし区間を赤い点線で結ぶ(この間の経路は不明)。
+        gaps.forEach((gp) => {
+          new g.maps.Polyline({
+            path: [
+              { lat: points[gp.fromIdx].lat, lng: points[gp.fromIdx].lng },
+              { lat: points[gp.toIdx].lat, lng: points[gp.toIdx].lng },
+            ],
+            strokeOpacity: 0,
+            icons: [
+              {
+                icon: {
+                  path: "M 0,-1 0,1",
+                  strokeOpacity: 1,
+                  strokeColor: "#dc2626",
+                  scale: 3,
+                },
+                offset: "0",
+                repeat: "12px",
+              },
+            ],
+            zIndex: 5,
+            map,
+          });
         });
 
         // 各点の丸マーカー(クリックで時刻)。多い場合は最大800個に間引く。
@@ -161,7 +238,7 @@ export default function MapView({
     return () => {
       cancelled = true;
     };
-  }, [apiKey, points]);
+  }, [apiKey, points, gaps]);
 
   // スクラバー移動時に、赤マーカーと通過済み軌跡を更新する。
   useEffect(() => {
@@ -204,9 +281,30 @@ export default function MapView({
             {points.length ? cursor + 1 : 0} / {points.length}
           </span>
         </div>
-        <p className="mt-1 text-xs text-neutral-400">
-          スライダーを動かすと、その時刻の位置(赤)と通過済みの軌跡が強調表示されます。
-        </p>
+
+        {gaps.length > 0 ? (
+          <div className="mt-2">
+            <div className="text-xs font-medium text-red-600">
+              🕳 記録なしの時間帯: {gaps.length} 件（赤い点線の区間）
+            </div>
+            <div className="mt-1 flex gap-2 overflow-x-auto pb-1">
+              {gaps.map((gp, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCursor(gp.toIdx)}
+                  className="shrink-0 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs tabular-nums text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+                  title="この時刻(記録再開点)へ移動"
+                >
+                  {jstHM(gp.fromTime)} → {jstHM(gp.toTime)}（{fmtDuration(gp.ms)}）
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-1 text-xs text-neutral-400">
+            スライダーを動かすと、その時刻の位置(赤)と通過済みの軌跡が強調表示されます。記録なしの時間帯はありません。
+          </p>
+        )}
       </div>
     </div>
   );

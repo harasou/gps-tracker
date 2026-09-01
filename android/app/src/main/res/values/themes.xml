@@ -1,0 +1,4 @@
+<resources>
+    <!-- Compose を使うので Material3 の DayNight テーマをベースにする。 -->
+    <style name="Theme.GpsTracker" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

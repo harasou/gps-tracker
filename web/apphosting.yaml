@@ -1,0 +1,24 @@
+# Firebase App Hosting runtime/build config
+#
+# 秘匿値(DEVICE_TOKEN / MAPS_API_KEY)は値を直書きせず Cloud Secret Manager 参照にする。
+#   firebase apphosting:secrets:set DEVICE_TOKEN
+#   firebase apphosting:secrets:set GOOGLE_MAPS_API_KEY
+# で登録してから deploy する。詳細は README を参照。
+
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+
+env:
+  # Android アプリからの POST を認証するデバイストークン(サーバ側のみで参照)
+  - variable: DEVICE_TOKEN
+    secret: DEVICE_TOKEN
+    availability:
+      - RUNTIME
+
+  # Google Maps JavaScript API キー。地図ページ(サーバコンポーネント)が
+  # スクリプトタグに埋め込むため RUNTIME で参照する。
+  - variable: GOOGLE_MAPS_API_KEY
+    secret: GOOGLE_MAPS_API_KEY
+    availability:
+      - RUNTIME

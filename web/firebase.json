@@ -1,0 +1,19 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "apphosting": {
+    "backendId": "gps-tracker",
+    "rootDir": "/web",
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".next",
+      ".firebase",
+      ".claude",
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ]
+  }
+}

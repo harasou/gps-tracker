@@ -36,7 +36,6 @@ function jstTime(iso: string): string {
   }).format(new Date(iso));
 }
 
-// クリックした点が「何番目 / 全体」かも出す。
 function popupHtml(p: LocationPoint, index: number, total: number): string {
   const acc = p.accuracy !== undefined ? `<br>精度 約${Math.round(p.accuracy)}m` : "";
   return `<div style="font-size:12px;line-height:1.5">🕐 <b>${jstTime(
@@ -52,8 +51,20 @@ export default function MapView({
   points: LocationPoint[];
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
+  const gRef = useRef<typeof google | null>(null);
+  const mapObjRef = useRef<google.maps.Map | null>(null);
+  const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
+  const travelledRef = useRef<google.maps.Polyline | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // タイムラインスクラバーの現在位置(点のインデックス)。初期は末尾(最新)。
+  const [cursor, setCursor] = useState<number>(points.length - 1);
 
+  // 表示対象が変わったらカーソルを末尾へ戻す。
+  useEffect(() => {
+    setCursor(points.length - 1);
+  }, [points]);
+
+  // 地図の初期化。
   useEffect(() => {
     let cancelled = false;
 
@@ -61,6 +72,7 @@ export default function MapView({
       .then(() => {
         if (cancelled || !mapRef.current) return;
         const g = (window as unknown as { google: typeof google }).google;
+        gRef.current = g;
 
         const path = points.map((p) => ({ lat: p.lat, lng: p.lng }));
         const last = path[path.length - 1];
@@ -71,22 +83,30 @@ export default function MapView({
           mapTypeControl: true,
           streetViewControl: false,
         });
+        mapObjRef.current = map;
 
-        // 軌跡を線で描く
+        // 全体の軌跡(薄い青)。未通過ぶんの下地になる。
         new g.maps.Polyline({
           path,
           geodesic: true,
-          strokeColor: "#2563eb",
-          strokeOpacity: 0.7,
+          strokeColor: "#93c5fd",
+          strokeOpacity: 0.9,
           strokeWeight: 3,
           map,
         });
 
-        // クリックで時刻を出す共有 InfoWindow
-        const info = new g.maps.InfoWindow();
+        // 通過済みの軌跡(濃い青)。スクラバーで長さが変わる。初期は全区間。
+        travelledRef.current = new g.maps.Polyline({
+          path,
+          geodesic: true,
+          strokeColor: "#2563eb",
+          strokeOpacity: 0.9,
+          strokeWeight: 4,
+          map,
+        });
 
-        // 各点を小さな丸マーカーにして、クリックで時刻(JST)を表示。
-        // 点が多すぎると重いので、最大 800 個に間引く(間引いても時刻は分かる)。
+        // 各点の丸マーカー(クリックで時刻)。多い場合は最大800個に間引く。
+        const info = new g.maps.InfoWindow();
         const MAX_MARKERS = 800;
         const step = Math.max(1, Math.ceil(points.length / MAX_MARKERS));
         for (let i = 0; i < points.length; i += step) {
@@ -96,9 +116,9 @@ export default function MapView({
             map,
             icon: {
               path: g.maps.SymbolPath.CIRCLE,
-              scale: 4,
+              scale: 3.5,
               fillColor: "#2563eb",
-              fillOpacity: 0.9,
+              fillOpacity: 0.8,
               strokeColor: "#ffffff",
               strokeWeight: 1,
             },
@@ -110,12 +130,8 @@ export default function MapView({
           });
         }
 
-        // 始点(S)・終点(E)は大きめのピンで、クリックで時刻表示。
-        const makePin = (
-          p: LocationPoint,
-          index: number,
-          label: string,
-        ) => {
+        // 始点 S / 終点 E。
+        const makePin = (p: LocationPoint, index: number, label: string) => {
           const pin = new g.maps.Marker({
             position: { lat: p.lat, lng: p.lng },
             map,
@@ -131,7 +147,22 @@ export default function MapView({
         makePin(points[0], 0, "S");
         makePin(points[points.length - 1], points.length - 1, "E");
 
-        // 全点が収まるように表示範囲を調整。ただし寄りすぎ防止に最大ズームを制限。
+        // スクラバーの現在位置を示す赤い大きめマーカー。
+        cursorMarkerRef.current = new g.maps.Marker({
+          position: last,
+          map,
+          zIndex: 2000,
+          icon: {
+            path: g.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#dc2626",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2,
+          },
+        });
+
+        // 全点が収まるように調整。寄りすぎ防止に最大ズームを制限。
         const bounds = new g.maps.LatLngBounds();
         path.forEach((pt) => bounds.extend(pt));
         map.fitBounds(bounds);
@@ -149,9 +180,51 @@ export default function MapView({
     };
   }, [apiKey, points]);
 
+  // スクラバー移動時に、赤マーカーと通過済み軌跡を更新する。
+  useEffect(() => {
+    const map = mapObjRef.current;
+    const cm = cursorMarkerRef.current;
+    const tr = travelledRef.current;
+    if (!map || !cm || !tr) return;
+    const p = points[cursor];
+    if (!p) return;
+    const pos = { lat: p.lat, lng: p.lng };
+    cm.setPosition(pos);
+    tr.setPath(points.slice(0, cursor + 1).map((q) => ({ lat: q.lat, lng: q.lng })));
+    map.panTo(pos);
+  }, [cursor, points]);
+
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
   }
 
-  return <div ref={mapRef} className="flex-1" />;
+  const current = points[cursor];
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <div ref={mapRef} className="flex-1" />
+      <div className="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <div className="flex items-center gap-3 text-sm">
+          <span className="w-28 shrink-0 font-medium tabular-nums">
+            🕐 {current ? jstTime(current.recordedAt) : "--:--:--"}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, points.length - 1)}
+            value={cursor}
+            onChange={(e) => setCursor(Number(e.target.value))}
+            className="flex-1 accent-red-600"
+            aria-label="時間スクラバー"
+          />
+          <span className="w-20 shrink-0 text-right tabular-nums text-neutral-500">
+            {points.length ? cursor + 1 : 0} / {points.length}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-neutral-400">
+          スライダーを動かすと、その時刻の位置(赤)と通過済みの軌跡が強調表示されます。
+        </p>
+      </div>
+    </div>
+  );
 }

@@ -1,5 +1,6 @@
 package com.harasou.gpstracker
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -146,6 +147,24 @@ class LocationService : LifecycleService() {
             NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "位置情報を記録中の常駐通知" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /**
+     * 最近のアプリ一覧からスワイプで消されたときに呼ばれる。
+     * 記録を続けたいので、少し後に自身を再起動するようアラームを仕込む。
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val restart = Intent(applicationContext, LocationService::class.java)
+        val pi = PendingIntent.getForegroundService(
+            this,
+            1,
+            restart,
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val am = getSystemService(AlarmManager::class.java)
+        am.set(AlarmManager.RTC, System.currentTimeMillis() + 1_000, pi)
+        Log.i(TAG, "タスク削除を検知。1秒後に再起動を予約")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

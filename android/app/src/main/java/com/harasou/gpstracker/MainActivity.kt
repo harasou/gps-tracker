@@ -71,6 +71,8 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
         deviceToken = s.deviceToken
         intervalSec = s.intervalSec.toString()
         deviceId = s.deviceId
+        // 記録中に再度開いたときは「停止」ボタンを出す。
+        running = s.trackingEnabled
     }
 
     // まとめて権限をリクエストするランチャ
@@ -177,6 +179,8 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
                                     deviceToken = deviceToken,
                                     intervalSec = intervalSec.toLongOrNull() ?: 60L,
                                 )
+                                // 再起動後も自動復帰できるよう記録中フラグを立てる。
+                                settingsRepo.setTrackingEnabled(true)
                                 LocationService.start(context)
                                 running = true
                                 status = "記録を開始しました。"
@@ -189,6 +193,7 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
         } else {
             Button(
                 onClick = {
+                    scope.launch { settingsRepo.setTrackingEnabled(false) }
                     LocationService.stop(context)
                     running = false
                     status = "記録を停止しました。"

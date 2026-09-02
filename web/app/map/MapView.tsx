@@ -122,6 +122,8 @@ export default function MapView({
   const [pointIdx, setPointIdx] = useState(0);
   const currentMarkerRef = useRef<google.maps.Marker | null>(null);
   const stepInfoRef = useRef<google.maps.InfoWindow | null>(null);
+  // 直前に描画した枠。枠切替(=全体フィット)とステップ移動を区別するのに使う。
+  const prevWindowRef = useRef<LocationPoint[] | null>(null);
 
   const gaps = useMemo(() => detectGaps(points), [points]);
 
@@ -248,6 +250,9 @@ export default function MapView({
     const g = (window as unknown as { google?: typeof google }).google;
     if (!map || !g) return;
 
+    const isNewWindow = prevWindowRef.current !== windowPoints;
+    prevWindowRef.current = windowPoints;
+
     if (windowPoints.length === 0) {
       currentMarkerRef.current?.setMap(null);
       stepInfoRef.current?.close();
@@ -281,6 +286,12 @@ export default function MapView({
       )}</b>（JST）<br>${stepIdx + 1} / ${windowPoints.length} 点目</div>`,
     );
     stepInfoRef.current.open({ map, anchor: currentMarkerRef.current });
+
+    // 枠切替は全体フィットに任せる。ステップ移動で現在点が画面外なら寄せる。
+    if (!isNewWindow) {
+      const b = map.getBounds();
+      if (!b || !b.contains(pos)) map.panTo(pos);
+    }
   }, [mapReady, windowPoints, stepIdx]);
 
   // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。

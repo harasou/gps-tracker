@@ -1,8 +1,7 @@
 import type { Query } from "firebase-admin/firestore";
 import { db, LOCATIONS_COLLECTION } from "@/lib/firebaseAdmin";
 import type { LocationPoint } from "@/lib/types";
-import MapView from "./MapView";
-import DateInput from "./DateInput";
+import MapArea from "./MapArea";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -248,48 +247,16 @@ export default async function MapPage({
           </span>
         </div>
 
-        {/* 日付フィルタ。date 入力はネイティブのカレンダーを開き、選ぶと即反映。 */}
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-          {/* 前日 */}
-          <a
-            href={dayHref(shiftDay(day, -1), deviceId)}
-            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            aria-label="前日"
-          >
-            ◀ 前日
-          </a>
-
-          <DateInput current={day} deviceId={deviceId} />
-
-          {/* 翌日 */}
-          <a
-            href={dayHref(shiftDay(day, 1), deviceId)}
-            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            aria-label="翌日"
-          >
-            翌日 ▶
-          </a>
-
-          <a
-            href={dayHref(today, deviceId)}
-            className="rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            今日
-          </a>
-        </div>
       </header>
 
-      {!apiKey ? (
-        <div className="p-6 text-red-600">
-          GOOGLE_MAPS_API_KEY が設定されていません。README のセットアップ手順を参照してください。
-        </div>
-      ) : points.length === 0 ? (
-        <div className="p-6 text-neutral-500">
-          この日の位置情報がありません。日付を変えるか「全期間」で直近を表示してください。
-        </div>
-      ) : (
-        <MapView apiKey={apiKey} points={points} />
-      )}
+      <MapArea
+        apiKey={apiKey}
+        points={points}
+        day={day}
+        deviceId={deviceId}
+        prevHref={dayHref(shiftDay(day, -1), deviceId)}
+        nextHref={dayHref(shiftDay(day, 1), deviceId)}
+      />
     </main>
   );
 }

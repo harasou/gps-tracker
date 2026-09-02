@@ -106,12 +106,14 @@ function popupHtml(p: LocationPoint, index: number, total: number): string {
 export default function MapView({
   apiKey,
   points,
+  mapObjRef,
 }: {
   apiKey: string;
   points: LocationPoint[];
+  // 地図オブジェクトは親(MapArea)と共有し、ヘッダーの「最新」「全体」ボタンから操作する。
+  mapObjRef: React.MutableRefObject<google.maps.Map | null>;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapObjRef = useRef<google.maps.Map | null>(null);
   const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
   const travelledRef = useRef<google.maps.Polyline | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -309,30 +311,6 @@ export default function MapView({
     map.panTo(pos);
   }, [cursorIdx, points]);
 
-  // 「今」: 最新(現在)地点に寄る。カメラのみ動かす(データ・スクラバーは変えない)。
-  function zoomToNow() {
-    const map = mapObjRef.current;
-    if (!map || points.length === 0) return;
-    const last = points[points.length - 1];
-    map.panTo({ lat: last.lat, lng: last.lng });
-    map.setZoom(17);
-  }
-
-  // 「全体」: その日の軌跡全体が収まるよう引く(初期表示と同じ fitBounds)。
-  function zoomToDay() {
-    const map = mapObjRef.current;
-    const g = (window as unknown as { google?: typeof google }).google;
-    if (!map || !g || points.length === 0) return;
-    const bounds = new g.maps.LatLngBounds();
-    points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
-    map.fitBounds(bounds);
-    // 寄りすぎ防止に最大ズームを制限(初期表示と同じ挙動)。
-    g.maps.event.addListenerOnce(map, "idle", () => {
-      const z = map.getZoom();
-      if (z !== undefined && z > 17) map.setZoom(17);
-    });
-  }
-
   // clientX → その位置の時刻(ms)。
   function timeAtX(clientX: number): number {
     const el = barRef.current;
@@ -382,24 +360,7 @@ export default function MapView({
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="relative flex-1">
-        <div ref={mapRef} className="absolute inset-0" />
-        {/* 地図上部中央のカメラ操作。今=最新に寄る / 全体=1日全体に引く。 */}
-        <div className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 gap-1">
-          <button
-            onClick={zoomToNow}
-            className="rounded bg-white/95 px-3 py-1.5 text-sm font-medium shadow hover:bg-white dark:bg-neutral-800/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
-          >
-            今
-          </button>
-          <button
-            onClick={zoomToDay}
-            className="rounded bg-white/95 px-3 py-1.5 text-sm font-medium shadow hover:bg-white dark:bg-neutral-800/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
-          >
-            全体
-          </button>
-        </div>
-      </div>
+      <div ref={mapRef} className="flex-1" />
       <div className="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
         <div className="mb-2 flex items-center gap-3 text-sm">
           <span className="font-medium tabular-nums">

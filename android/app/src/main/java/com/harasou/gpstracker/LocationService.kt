@@ -10,19 +10,25 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.location.Location
 import android.os.Build
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -82,7 +88,7 @@ class LocationService : LifecycleService() {
 
     /** 1 回分: 現在地を要求し、取れたら座標付き・取れなければ位置不明として送る。 */
     private suspend fun tick(s: AppSettings, fixTimeoutMs: Long) {
-        val loc: Location? = requestLocation(fixTimeoutMs)
+        val loc: Location? = bestFix(fixTimeoutMs)
         withContext(Dispatchers.IO) {
             if (loc != null) {
                 uploader.upload(s, loc)
@@ -92,23 +98,57 @@ class LocationService : LifecycleService() {
         }
     }
 
-    /** 現在地を 1 回要求する。タイムアウト/失敗/測位不能なら null。 */
-    private suspend fun requestLocation(fixTimeoutMs: Long): Location? {
-        val cts = CancellationTokenSource()
-        return try {
-            withTimeoutOrNull(fixTimeoutMs) {
-                fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token).await()
+    /**
+     * ベストオブN 測位。GPS を最大 windowMs だけ回し、最も精度の良い fix を返す。
+     * 単発取得だと 1 発目の粗い fix をそのまま記録してしまうため、短時間サンプリング
+     * して精度が収束した点を採る。
+     *
+     * - 目標精度 [TARGET_ACCURACY_M] 以下の fix が出たら即終了(早期打ち切りで電池節約)。
+     * - elapsedRealtime が [STALE_MS] 以上前の古いキャッシュ fix は無視する
+     *   (「飛んで戻る」テレポートの一因)。
+     * - タイムアウトしても、その間のベスト fix を返す。1 件も取れなければ null。
+     */
+    private suspend fun bestFix(windowMs: Long): Location? {
+        val best = AtomicReference<Location?>(null)
+        val request = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            SAMPLE_INTERVAL_MS,
+        ).setMinUpdateIntervalMillis(SAMPLE_INTERVAL_MS).build()
+
+        val early: Location? = try {
+            withTimeoutOrNull(windowMs) {
+                suspendCancellableCoroutine { cont ->
+                    val callback = object : LocationCallback() {
+                        override fun onLocationResult(result: LocationResult) {
+                            val loc = result.lastLocation ?: return
+                            val ageMs =
+                                (SystemClock.elapsedRealtimeNanos() - loc.elapsedRealtimeNanos) / 1_000_000
+                            // 古いキャッシュ fix・精度不明は捨てる。
+                            if (ageMs > STALE_MS || !loc.hasAccuracy()) return
+                            val cur = best.get()
+                            if (cur == null || loc.accuracy < cur.accuracy) best.set(loc)
+                            // 目標精度に達したら早期終了。
+                            if (loc.accuracy <= TARGET_ACCURACY_M && cont.isActive) {
+                                fused.removeLocationUpdates(this)
+                                cont.resume(best.get())
+                            }
+                        }
+                    }
+                    fused.requestLocationUpdates(request, callback, Looper.getMainLooper())
+                    cont.invokeOnCancellation { fused.removeLocationUpdates(callback) }
+                }
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "位置情報の権限がありません", e)
             stopSelf()
-            null
+            return null
         } catch (e: Exception) {
             Log.w(TAG, "測位に失敗: ${e.message}")
             null
-        } finally {
-            cts.cancel()
         }
+
+        // 早期終了なら early、タイムアウトなら期間中のベスト fix を返す。
+        return early ?: best.get()
     }
 
     private fun startForegroundCompat() {
@@ -177,6 +217,11 @@ class LocationService : LifecycleService() {
         private const val CHANNEL_ID = "location_tracking"
         private const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.harasou.gpstracker.STOP"
+
+        // ベストオブN 測位のチューニング値(将来 Settings に出せるよう定数化)。
+        private const val TARGET_ACCURACY_M = 30f    // これ以下の精度が出たら即採用(早期打ち切り)
+        private const val SAMPLE_INTERVAL_MS = 1_000L // GPS サンプリング間隔
+        private const val STALE_MS = 10_000L          // これより古いキャッシュ fix は無視
 
         fun start(context: Context) {
             val intent = Intent(context, LocationService::class.java)

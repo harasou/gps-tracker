@@ -16,11 +16,18 @@ const MAX_POINTS = 2000;
 const MAX_ACCURACY_M = 100;
 // - 直前の採用点からの移動速度がこれを超える点は物理的にありえない飛びとして除外。
 const MAX_SPEED_KMH = 300;
+// - スパイク除去: A→B→C で B だけ大きく寄り道して戻る点(=誤測位のテレポート)を外す。
+//   B が前点から SPIKE_MIN_M 以上離れ、かつ寄り道率 (|AB|+|BC|)/|AC| が
+//   SPIKE_RATIO を超えたら B を除外。地下/屋内で精度を低く詐称した fix は
+//   精度・速度フィルタを抜けるが、この形状(飛んで戻る)で捕まえられる。
+const SPIKE_MIN_M = 200;
+const SPIKE_RATIO = 4;
 
 interface Filtered {
   points: LocationPoint[];
   excludedByAccuracy: number;
   excludedBySpeed: number;
+  excludedBySpike: number;
 }
 
 // 2 点間の距離(メートル)。ハバーサイン。
@@ -37,8 +44,38 @@ function haversineM(a: LocationPoint, b: LocationPoint): number {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+// 「飛んで戻る」スパイク点を反復的に除去する。points は時刻昇順であること。
+// 直前の採用点 A・当該点 B・次点 C を見て、B が寄り道スパイクなら B を落とす。
+// 1 点除くと隣の三角形が変わるため、変化がなくなるまで数回繰り返す。
+function despike(points: LocationPoint[]): { points: LocationPoint[]; removed: number } {
+  let arr = points;
+  let removed = 0;
+  for (let pass = 0; pass < 5; pass++) {
+    if (arr.length < 3) break;
+    const out: LocationPoint[] = [arr[0]];
+    let changed = false;
+    for (let i = 1; i < arr.length - 1; i++) {
+      const a = out[out.length - 1];
+      const b = arr[i];
+      const c = arr[i + 1];
+      const ab = haversineM(a, b);
+      const ratio = (ab + haversineM(b, c)) / Math.max(haversineM(a, c), 1);
+      if (ab > SPIKE_MIN_M && ratio > SPIKE_RATIO) {
+        removed += 1;
+        changed = true;
+        continue; // B を捨てる
+      }
+      out.push(b);
+    }
+    out.push(arr[arr.length - 1]);
+    arr = out;
+    if (!changed) break;
+  }
+  return { points: arr, removed };
+}
+
 // 品質フィルタ。points は時刻昇順であること。
-// 1) 精度が粗い点を除外 → 2) 直前の採用点から非現実的な速度で飛ぶ点を除外。
+// 1) 精度が粗い点 → 2) 非現実的な速度で飛ぶ点 → 3) 飛んで戻るスパイク点、の順に除外。
 function filterPoints(points: LocationPoint[]): Filtered {
   const byAccuracy = points.filter(
     (p) => !(p.accuracy !== undefined && p.accuracy >= MAX_ACCURACY_M),
@@ -46,10 +83,10 @@ function filterPoints(points: LocationPoint[]): Filtered {
   const excludedByAccuracy = points.length - byAccuracy.length;
 
   const maxMps = (MAX_SPEED_KMH * 1000) / 3600;
-  const kept: LocationPoint[] = [];
+  const bySpeed: LocationPoint[] = [];
   let excludedBySpeed = 0;
   for (const p of byAccuracy) {
-    const prev = kept[kept.length - 1];
+    const prev = bySpeed[bySpeed.length - 1];
     if (prev) {
       const dtSec = (Date.parse(p.recordedAt) - Date.parse(prev.recordedAt)) / 1000;
       // dt<=0(時刻逆転/同時刻)は速度計算せず採用する。
@@ -58,10 +95,12 @@ function filterPoints(points: LocationPoint[]): Filtered {
         continue;
       }
     }
-    kept.push(p);
+    bySpeed.push(p);
   }
 
-  return { points: kept, excludedByAccuracy, excludedBySpeed };
+  const { points: kept, removed: excludedBySpike } = despike(bySpeed);
+
+  return { points: kept, excludedByAccuracy, excludedBySpeed, excludedBySpike };
 }
 
 // 日付は JST(日本時間)の暦日として解釈する。保存は UTC なので境界を変換する。
@@ -107,6 +146,7 @@ async function fetchPoints(
   rawLocated: number;
   excludedByAccuracy: number;
   excludedBySpeed: number;
+  excludedBySpike: number;
 }> {
   let query: Query = db.collection(LOCATIONS_COLLECTION);
 
@@ -154,6 +194,7 @@ async function fetchPoints(
     rawLocated,
     excludedByAccuracy: filtered.excludedByAccuracy,
     excludedBySpeed: filtered.excludedBySpeed,
+    excludedBySpike: filtered.excludedBySpike,
   };
 }
 
@@ -176,11 +217,17 @@ export default async function MapPage({
   const today = jstDay(0);
   // 日付未指定なら今日を表示する。
   const day = date && DAY_RE.test(date) ? date : today;
-  const { points, noFixCount, rawLocated, excludedByAccuracy, excludedBySpeed } =
-    await fetchPoints(deviceId, day);
+  const {
+    points,
+    noFixCount,
+    rawLocated,
+    excludedByAccuracy,
+    excludedBySpeed,
+    excludedBySpike,
+  } = await fetchPoints(deviceId, day);
 
   const rangeLabel = `${day}（${weekdayJa(day)}）`;
-  const excludedTotal = excludedByAccuracy + excludedBySpeed;
+  const excludedTotal = excludedByAccuracy + excludedBySpeed + excludedBySpike;
   // 測位できた点(rawLocated)に対する除外割合。
   const excludedPct =
     rawLocated > 0 ? Math.round((excludedTotal / rawLocated) * 1000) / 10 : 0;
@@ -194,7 +241,7 @@ export default async function MapPage({
             {points.length} 点
             {noFixCount > 0 ? ` / 位置不明 ${noFixCount} 件` : ""}
             {excludedTotal > 0
-              ? ` / 除外 ${excludedTotal} 点 (${excludedPct}%: 精度${excludedByAccuracy}/速度${excludedBySpeed})`
+              ? ` / 除外 ${excludedTotal} 点 (${excludedPct}%: 精度${excludedByAccuracy}/速度${excludedBySpeed}/スパイク${excludedBySpike})`
               : ""}{" "}
             / {rangeLabel}
             {deviceId ? ` / device: ${deviceId}` : ""}

@@ -132,7 +132,8 @@ export default function MapView({
   // 下部の詳細パネル(点数・除外内訳など)。既定は閉じ、ハンドルの上スワイプ/タップで開く。
   const [detailsOpen, setDetailsOpen] = useState(false);
   const swipeRef = useRef(0);
-  const travelledRef = useRef<google.maps.Polyline | null>(null);
+  // 通過済み軌跡はギャップで分断するため、連続区間(run)ごとにポリラインを持つ。
+  const travelledRef = useRef<{ indices: number[]; line: google.maps.Polyline }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   // 窓ドラッグの一時状態(再描画を挟まないので ref に持つ)。
@@ -219,50 +220,45 @@ export default function MapView({
         });
         mapObjRef.current = map;
 
-        // 全体の軌跡(薄い青)。
-        new g.maps.Polyline({
-          path,
-          geodesic: true,
-          strokeColor: "#93c5fd",
-          strokeOpacity: 0.9,
-          strokeWeight: 3,
-          map,
-        });
+        // ギャップ(記録なし区間)で軌跡を分断する。ギャップをまたぐ線は引かない。
+        // gaps の各要素は点 fromIdx→toIdx(=fromIdx+1) 間がギャップ。その手前で run を切る。
+        const breakAfter = new Set(gaps.map((gp) => gp.fromIdx));
+        const runs: number[][] = [];
+        let cur: number[] = [];
+        for (let i = 0; i < points.length; i++) {
+          cur.push(i);
+          if (breakAfter.has(i)) {
+            runs.push(cur);
+            cur = [];
+          }
+        }
+        if (cur.length) runs.push(cur);
 
-        // 通過済みの軌跡(濃い青)。スクラバーで長さが変わる。
-        travelledRef.current = new g.maps.Polyline({
-          path,
-          geodesic: true,
-          strokeColor: "#2563eb",
-          strokeOpacity: 0.9,
-          strokeWeight: 4,
-          map,
-        });
-
-        // 記録なし区間を赤い点線で結ぶ(この間の経路は不明)。
-        gaps.forEach((gp) => {
+        // 全体の軌跡(薄い青)。区間ごとに描画(ギャップはつながない)。
+        runs.forEach((run) => {
+          if (run.length < 2) return;
           new g.maps.Polyline({
-            path: [
-              { lat: points[gp.fromIdx].lat, lng: points[gp.fromIdx].lng },
-              { lat: points[gp.toIdx].lat, lng: points[gp.toIdx].lng },
-            ],
-            strokeOpacity: 0,
-            icons: [
-              {
-                icon: {
-                  path: "M 0,-1 0,1",
-                  strokeOpacity: 1,
-                  strokeColor: "#dc2626",
-                  scale: 3,
-                },
-                offset: "0",
-                repeat: "12px",
-              },
-            ],
-            zIndex: 5,
+            path: run.map((i) => ({ lat: points[i].lat, lng: points[i].lng })),
+            geodesic: true,
+            strokeColor: "#93c5fd",
+            strokeOpacity: 0.9,
+            strokeWeight: 3,
             map,
           });
         });
+
+        // 通過済みの軌跡(濃い青)。区間ごとに空のポリラインを用意し、スクラバーで長さを更新。
+        travelledRef.current = runs.map((run) => ({
+          indices: run,
+          line: new g.maps.Polyline({
+            path: [],
+            geodesic: true,
+            strokeColor: "#2563eb",
+            strokeOpacity: 0.9,
+            strokeWeight: 4,
+            map,
+          }),
+        }));
 
         // 各点の丸マーカー(クリックで時刻)。多い場合は最大800個に間引く。
         const info = new g.maps.InfoWindow();
@@ -318,13 +314,19 @@ export default function MapView({
   useEffect(() => {
     const map = mapObjRef.current;
     const cm = cursorMarkerRef.current;
-    const tr = travelledRef.current;
-    if (!map || !cm || !tr) return;
+    const runs = travelledRef.current;
+    if (!map || !cm) return;
     const p = points[cursorIdx];
     if (!p) return;
     const pos = { lat: p.lat, lng: p.lng };
     cm.setPosition(pos);
-    tr.setPath(points.slice(0, cursorIdx + 1).map((q) => ({ lat: q.lat, lng: q.lng })));
+    // 区間ごとに、カーソルまでの点だけを濃い青で描く(ギャップはまたがない)。
+    runs.forEach(({ indices, line }) => {
+      const sub = indices
+        .filter((i) => i <= cursorIdx)
+        .map((i) => ({ lat: points[i].lat, lng: points[i].lng }));
+      line.setPath(sub);
+    });
     map.panTo(pos);
   }, [cursorIdx, points]);
 

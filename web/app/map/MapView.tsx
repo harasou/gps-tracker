@@ -225,14 +225,10 @@ export default function MapView({
       plotRef.current.overlays.push(marker);
     });
 
-    // 枠の点が収まるようにフィット(寄りすぎ防止に最大ズームを制限)。
+    // 枠の点が収まるようにフィット(最大ズーム制限なし)。
     const bounds = new g.maps.LatLngBounds();
     windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
     map.fitBounds(bounds);
-    g.maps.event.addListenerOnce(map, "idle", () => {
-      const z = map.getZoom();
-      if (z !== undefined && z > 17) map.setZoom(17);
-    });
   }, [mapReady, windowPoints]);
 
   // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。

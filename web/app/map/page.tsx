@@ -10,6 +10,60 @@ export const dynamic = "force-dynamic";
 // 一度に地図へ描画する最大点数
 const MAX_POINTS = 2000;
 
+// 描画から除外する測位品質のしきい値。
+// - 精度(誤差半径)がこれ以上の点は不正確なので描画しない。地下や屋内で
+//   基地局ベースの粗い fix が返ると軌跡が飛ぶため。
+const MAX_ACCURACY_M = 100;
+// - 直前の採用点からの移動速度がこれを超える点は物理的にありえない飛びとして除外。
+const MAX_SPEED_KMH = 300;
+
+interface Filtered {
+  points: LocationPoint[];
+  excludedByAccuracy: number;
+  excludedBySpeed: number;
+}
+
+// 2 点間の距離(メートル)。ハバーサイン。
+function haversineM(a: LocationPoint, b: LocationPoint): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// 品質フィルタ。points は時刻昇順であること。
+// 1) 精度が粗い点を除外 → 2) 直前の採用点から非現実的な速度で飛ぶ点を除外。
+function filterPoints(points: LocationPoint[]): Filtered {
+  const byAccuracy = points.filter(
+    (p) => !(p.accuracy !== undefined && p.accuracy >= MAX_ACCURACY_M),
+  );
+  const excludedByAccuracy = points.length - byAccuracy.length;
+
+  const maxMps = (MAX_SPEED_KMH * 1000) / 3600;
+  const kept: LocationPoint[] = [];
+  let excludedBySpeed = 0;
+  for (const p of byAccuracy) {
+    const prev = kept[kept.length - 1];
+    if (prev) {
+      const dtSec = (Date.parse(p.recordedAt) - Date.parse(prev.recordedAt)) / 1000;
+      // dt<=0(時刻逆転/同時刻)は速度計算せず採用する。
+      if (dtSec > 0 && haversineM(prev, p) / dtSec > maxMps) {
+        excludedBySpeed += 1;
+        continue;
+      }
+    }
+    kept.push(p);
+  }
+
+  return { points: kept, excludedByAccuracy, excludedBySpeed };
+}
+
 // 日付は JST(日本時間)の暦日として解釈する。保存は UTC なので境界を変換する。
 const TZ = "Asia/Tokyo";
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,7 +101,13 @@ function weekdayJa(day: string): string {
 async function fetchPoints(
   deviceId: string | undefined,
   day: string | undefined,
-): Promise<{ points: LocationPoint[]; noFixCount: number }> {
+): Promise<{
+  points: LocationPoint[];
+  noFixCount: number;
+  rawLocated: number;
+  excludedByAccuracy: number;
+  excludedBySpeed: number;
+}> {
   let query: Query = db.collection(LOCATIONS_COLLECTION);
 
   if (deviceId) query = query.where("deviceId", "==", deviceId);
@@ -84,7 +144,17 @@ async function fetchPoints(
 
   // recordedAt desc で取得したので、軌跡を古い→新しい順に並べ替える。
   points.reverse();
-  return { points, noFixCount };
+
+  // 測位品質フィルタ(精度・速度)を適用。除外内訳も返す。
+  const rawLocated = points.length;
+  const filtered = filterPoints(points);
+  return {
+    points: filtered.points,
+    noFixCount,
+    rawLocated,
+    excludedByAccuracy: filtered.excludedByAccuracy,
+    excludedBySpeed: filtered.excludedBySpeed,
+  };
 }
 
 // リンク先を組み立てる(deviceId は引き継ぐ)。day 未指定なら全期間。
@@ -106,9 +176,14 @@ export default async function MapPage({
   const today = jstDay(0);
   // 日付未指定なら今日を表示する。
   const day = date && DAY_RE.test(date) ? date : today;
-  const { points, noFixCount } = await fetchPoints(deviceId, day);
+  const { points, noFixCount, rawLocated, excludedByAccuracy, excludedBySpeed } =
+    await fetchPoints(deviceId, day);
 
   const rangeLabel = `${day}（${weekdayJa(day)}）`;
+  const excludedTotal = excludedByAccuracy + excludedBySpeed;
+  // 測位できた点(rawLocated)に対する除外割合。
+  const excludedPct =
+    rawLocated > 0 ? Math.round((excludedTotal / rawLocated) * 1000) / 10 : 0;
 
   return (
     <main className="flex h-dvh flex-col">
@@ -117,7 +192,11 @@ export default async function MapPage({
           <h1 className="text-lg font-semibold">GPS Tracker — 軌跡</h1>
           <span className="text-sm text-neutral-500">
             {points.length} 点
-            {noFixCount > 0 ? ` / 位置不明 ${noFixCount} 件` : ""} / {rangeLabel}
+            {noFixCount > 0 ? ` / 位置不明 ${noFixCount} 件` : ""}
+            {excludedTotal > 0
+              ? ` / 除外 ${excludedTotal} 点 (${excludedPct}%: 精度${excludedByAccuracy}/速度${excludedBySpeed})`
+              : ""}{" "}
+            / {rangeLabel}
             {deviceId ? ` / device: ${deviceId}` : ""}
           </span>
         </div>

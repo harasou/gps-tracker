@@ -69,7 +69,7 @@ export default function MapArea({
   }, [points, dayStartMs]);
 
   const btn =
-    "rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
+    "rounded border border-neutral-300 px-3 py-3 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
   const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
   // 今日の最終枠より先(未来)へは進めない。
   const nextBlocked = atLast && day >= today;
@@ -133,7 +133,7 @@ export default function MapArea({
         <select
           value={slotStartMs}
           onChange={(e) => setSlotStartMs(Number(e.target.value))}
-          className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-2 text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
+          className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-3 text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
           aria-label="時間帯(30分)を選択"
         >
           {Array.from({ length: 48 }, (_, i) => {
@@ -155,7 +155,7 @@ export default function MapArea({
           ▶
         </button>
         <button onClick={onUpdate} className={`${btn} shrink-0`} aria-label="今日の最新へ">
-          更新
+          最新
         </button>
       </div>
     </>

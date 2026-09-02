@@ -222,10 +222,6 @@ export default async function MapPage({
 
   return (
     <main className="flex h-dvh flex-col">
-      <header className="border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
-        <h1 className="text-lg font-semibold">GPS Tracker — 軌跡</h1>
-      </header>
-
       <MapArea
         apiKey={apiKey}
         points={points}

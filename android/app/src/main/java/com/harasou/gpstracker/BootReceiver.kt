@@ -9,14 +9,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
- * 端末再起動後、記録中だった場合に位置記録サービスを自動で再開する。
+ * 端末再起動後・アプリ更新後に、記録中だった場合は位置記録サービスを自動で再開する。
+ * アプリ更新(MY_PACKAGE_REPLACED)ではプロセスと前面サービスが止まるため、
+ * ここで拾わないと trackingEnabled のまま記録が止まってしまう。
  */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
         if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_LOCKED_BOOT_COMPLETED
+            action != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
+            action != Intent.ACTION_MY_PACKAGE_REPLACED
         ) {
             return
         }
@@ -28,7 +31,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val s = SettingsRepository(appContext).current()
                 if (s.trackingEnabled) {
-                    Log.i(TAG, "再起動後の自動復帰: 記録を再開します")
+                    Log.i(TAG, "自動復帰($action): 記録を再開します")
                     LocationService.start(appContext)
                 }
             } catch (e: Exception) {

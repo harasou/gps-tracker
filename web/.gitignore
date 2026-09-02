@@ -31,3 +31,6 @@ firebase-debug.log*
 firestore-debug.log*
 *-firebase-adminsdk-*.json
 serviceAccountKey.json
+
+# ad-hoc Firestore 集計の使い捨てスクリプト(手元実行のみ、コミットしない)
+_count_tmp.mjs

@@ -473,8 +473,24 @@ export default function MapView({
           ))}
         </div>
 
+        {/* 選択中の1時間を全幅で微調整。スマホでも指で分単位に狙える。 */}
+        <div className="mt-2 flex items-center gap-2 text-xs tabular-nums text-neutral-500">
+          <span className="w-11 shrink-0">{jstHMms(winStartMs)}</span>
+          <input
+            type="range"
+            min={winStartMs}
+            max={winStartMs + HOUR_MS}
+            step={30_000}
+            value={clamp(cursorMs, winStartMs, winStartMs + HOUR_MS)}
+            onChange={(e) => setCursorMs(Number(e.target.value))}
+            className="h-2 flex-1 accent-red-600"
+            aria-label="選択中の1時間の微調整"
+          />
+          <span className="w-11 shrink-0 text-right">{jstHMms(winStartMs + HOUR_MS)}</span>
+        </div>
+
         <p className="mt-1 text-xs text-neutral-400">
-          赤枠の1時間窓を左右にドラッグ、窓内をクリックで現在位置(赤線)を移動。赤い縦線＝未取得の時間帯。
+          上のバーをタップ/ドラッグで1時間窓を移動、下のスライダーで窓内の現在位置(赤線)を微調整。赤い縦線＝未取得の時間帯。
         </p>
       </div>
     </div>

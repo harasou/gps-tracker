@@ -6,7 +6,7 @@ import type { LocationPoint } from "@/lib/types";
 
 // 選択できる時間枠(30分)。
 export const SLOT_MS = 30 * 60 * 1000;
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
 let mapsPromise: Promise<void> | null = null;
@@ -42,7 +42,7 @@ function jstTime(iso: string): string {
 }
 
 // epoch ms を JST の "HH:mm" に整形。
-function jstHMms(ms: number): string {
+export function jstHMms(ms: number): string {
   return new Intl.DateTimeFormat("ja-JP", {
     timeZone: "Asia/Tokyo",
     hour: "2-digit",
@@ -98,13 +98,13 @@ export default function MapView({
   apiKey,
   points,
   meta,
-  day,
+  slotStartMs,
 }: {
   apiKey: string;
   points: LocationPoint[];
   meta: MapMeta;
-  // 表示中の JST 暦日 "YYYY-MM-DD"。30 分枠の基準(その日の 00:00)に使う。
-  day: string;
+  // 表示する 30 分枠の開始時刻(epoch ms)。選択は親(MapArea)が持つ。
+  slotStartMs: number;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapObjRef = useRef<google.maps.Map | null>(null);
@@ -120,31 +120,6 @@ export default function MapView({
   const swipeRef = useRef(0);
 
   const gaps = useMemo(() => detectGaps(points), [points]);
-
-  // その日の 00:00(JST) と 各点時刻。
-  const dayStartMs = useMemo(() => Date.parse(`${day}T00:00:00+09:00`), [day]);
-  const lastMs = points.length ? Date.parse(points[points.length - 1].recordedAt) : dayStartMs;
-  // ある時刻が属する 30 分枠の開始 ms。
-  const slotOf = (ms: number) =>
-    dayStartMs + Math.floor((ms - dayStartMs) / SLOT_MS) * SLOT_MS;
-
-  // 選択中の 30 分枠(開始 ms)。初期は最新点の枠。
-  const [slotStartMs, setSlotStartMs] = useState<number>(slotOf(lastMs));
-
-  // 表示対象(日)が変わったら最新枠へ戻す。
-  useEffect(() => {
-    setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
-  }, [points, dayStartMs, lastMs]);
-
-  // 枠ごとの点数(ドロップダウンに出す)。
-  const slotCounts = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const p of points) {
-      const idx = Math.floor((Date.parse(p.recordedAt) - dayStartMs) / SLOT_MS);
-      m.set(idx, (m.get(idx) ?? 0) + 1);
-    }
-    return m;
-  }, [points, dayStartMs]);
 
   // 選択中の 30 分枠に入る点だけ。
   const windowPoints = useMemo(
@@ -275,66 +250,15 @@ export default function MapView({
     return <div className="p-6 text-red-600">{error}</div>;
   }
 
-  const btn =
-    "rounded border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
-  const atFirst = slotStartMs <= dayStartMs;
-  const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
-
   return (
     <div className="flex flex-1 flex-col">
       <div ref={mapRef} className="flex-1" />
-      <div className="border-t border-neutral-200 px-4 pb-3 pt-2 dark:border-neutral-800">
-        {/* 時間ナビ(30分枠)。更新=最新枠へ / ← → で ±30分 / ドロップダウンで選択。 */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setSlotStartMs(slotOf(lastMs))}
-            className={btn}
-            aria-label="最新の時間帯へ"
-          >
-            更新
-          </button>
-          <button
-            onClick={() => setSlotStartMs(Math.max(dayStartMs, slotStartMs - SLOT_MS))}
-            className={btn}
-            disabled={atFirst}
-            aria-label="30分前"
-          >
-            ◀
-          </button>
-          <select
-            value={slotStartMs}
-            onChange={(e) => setSlotStartMs(Number(e.target.value))}
-            className="rounded border border-neutral-300 px-2 py-1.5 text-sm tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
-            aria-label="時間帯(30分)を選択"
-          >
-            {Array.from({ length: 48 }, (_, i) => {
-              const ms = dayStartMs + i * SLOT_MS;
-              const n = slotCounts.get(i) ?? 0;
-              return (
-                <option key={i} value={ms}>
-                  {jstHMms(ms)}–{jstHMms(ms + SLOT_MS)}
-                  {n > 0 ? ` (${n})` : ""}
-                </option>
-              );
-            })}
-          </select>
-          <button
-            onClick={() =>
-              setSlotStartMs(Math.min(dayStartMs + DAY_MS - SLOT_MS, slotStartMs + SLOT_MS))
-            }
-            className={btn}
-            disabled={atLast}
-            aria-label="30分後"
-          >
-            ▶
-          </button>
-        </div>
-
+      <div className="border-t border-neutral-200 px-4 pb-2 pt-1 dark:border-neutral-800">
         {/* 上スワイプ/タップで開く詳細ハンドル。 */}
         <div
           onPointerDown={onHandleDown}
           onPointerUp={onHandleUp}
-          className="mt-2 flex touch-none cursor-pointer select-none flex-col items-center gap-1"
+          className="flex touch-none cursor-pointer select-none flex-col items-center gap-1"
           role="button"
           aria-expanded={detailsOpen}
           aria-label="詳細の開閉"

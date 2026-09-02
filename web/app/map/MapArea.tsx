@@ -1,54 +1,115 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
-import MapView, { type MapMeta } from "./MapView";
+import MapView, { type MapMeta, SLOT_MS, DAY_MS, jstHMms } from "./MapView";
 import DateInput from "./DateInput";
 
-// 日付ナビと地図をまとめる。時間帯(30分)の選択・地図描画は MapView 側が持つ。
+// 地図と、その下の時間ナビ(日付+30分枠)をまとめる。
+// 30 分枠の選択状態はここで持ち、地図(MapView)へ渡す。
 export default function MapArea({
   apiKey,
   points,
   day,
   deviceId,
-  prevHref,
-  nextHref,
   meta,
 }: {
   apiKey: string;
   points: LocationPoint[];
   day: string;
   deviceId?: string;
-  prevHref: string;
-  nextHref: string;
   meta: MapMeta;
 }) {
+  // その日の 00:00(JST) と 各点時刻。
+  const dayStartMs = useMemo(() => Date.parse(`${day}T00:00:00+09:00`), [day]);
+  const lastMs = points.length ? Date.parse(points[points.length - 1].recordedAt) : dayStartMs;
+  const slotOf = (ms: number) => dayStartMs + Math.floor((ms - dayStartMs) / SLOT_MS) * SLOT_MS;
+
+  // 選択中の 30 分枠(開始 ms)。初期は最新点の枠。
+  const [slotStartMs, setSlotStartMs] = useState<number>(slotOf(lastMs));
+
+  // 表示対象(日)が変わったら最新枠へ戻す。
+  useEffect(() => {
+    setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
+  }, [points, dayStartMs, lastMs]);
+
+  // 枠ごとの点数(ドロップダウンに出す)。
+  const slotCounts = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const p of points) {
+      const idx = Math.floor((Date.parse(p.recordedAt) - dayStartMs) / SLOT_MS);
+      m.set(idx, (m.get(idx) ?? 0) + 1);
+    }
+    return m;
+  }, [points, dayStartMs]);
+
   const btn =
-    "rounded border border-neutral-300 px-2 py-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800";
+    "rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
+  const atFirst = slotStartMs <= dayStartMs;
+  const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
 
   return (
     <>
-      {/* 日付ナビ。date 入力はネイティブのカレンダー(今日も選べる)。 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 px-4 py-2 text-sm dark:border-neutral-800">
-        <a href={prevHref} className={btn} aria-label="前日">
-          ◀ 前日
-        </a>
-        <DateInput current={day} deviceId={deviceId} />
-        <a href={nextHref} className={btn} aria-label="翌日">
-          翌日 ▶
-        </a>
+      <div className="flex flex-1 flex-col">
+        {!apiKey ? (
+          <div className="p-6 text-red-600">
+            GOOGLE_MAPS_API_KEY が設定されていません。README のセットアップ手順を参照してください。
+          </div>
+        ) : points.length === 0 ? (
+          <div className="p-6 text-neutral-500">
+            この日の位置情報がありません。日付を変えて直近を表示してください。
+          </div>
+        ) : (
+          <MapView apiKey={apiKey} points={points} meta={meta} slotStartMs={slotStartMs} />
+        )}
       </div>
 
-      {!apiKey ? (
-        <div className="p-6 text-red-600">
-          GOOGLE_MAPS_API_KEY が設定されていません。README のセットアップ手順を参照してください。
-        </div>
-      ) : points.length === 0 ? (
-        <div className="p-6 text-neutral-500">
-          この日の位置情報がありません。日付を変えるか「全期間」で直近を表示してください。
-        </div>
-      ) : (
-        <MapView apiKey={apiKey} points={points} meta={meta} day={day} />
-      )}
+      {/* 下部ナビ: 左に ◀ 日付 時間 ▶ / 右に 更新。date はネイティブカレンダー。 */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
+        <button
+          onClick={() => setSlotStartMs(Math.max(dayStartMs, slotStartMs - SLOT_MS))}
+          className={`${btn} shrink-0`}
+          disabled={atFirst}
+          aria-label="30分前"
+        >
+          ◀
+        </button>
+        <DateInput current={day} deviceId={deviceId} />
+        <select
+          value={slotStartMs}
+          onChange={(e) => setSlotStartMs(Number(e.target.value))}
+          className="min-w-0 rounded border border-neutral-300 px-3 py-2 text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
+          aria-label="時間帯(30分)を選択"
+        >
+          {Array.from({ length: 48 }, (_, i) => {
+            const ms = dayStartMs + i * SLOT_MS;
+            const n = slotCounts.get(i) ?? 0;
+            return (
+              <option key={i} value={ms}>
+                {jstHMms(ms)}–{jstHMms(ms + SLOT_MS)}
+                {n > 0 ? ` (${n})` : ""}
+              </option>
+            );
+          })}
+        </select>
+        <button
+          onClick={() =>
+            setSlotStartMs(Math.min(dayStartMs + DAY_MS - SLOT_MS, slotStartMs + SLOT_MS))
+          }
+          className={`${btn} shrink-0`}
+          disabled={atLast}
+          aria-label="30分後"
+        >
+          ▶
+        </button>
+        <button
+          onClick={() => setSlotStartMs(slotOf(lastMs))}
+          className={`${btn} ml-auto shrink-0`}
+          aria-label="最新の時間帯へ"
+        >
+          更新
+        </button>
+      </div>
     </>
   );
 }

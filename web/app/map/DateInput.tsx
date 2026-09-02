@@ -23,7 +23,7 @@ export default function DateInput({
         if (deviceId) p.set("deviceId", deviceId);
         router.push(`/map?${p.toString()}`);
       }}
-      className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
+      className="rounded border border-neutral-300 px-3 py-2 text-base dark:border-neutral-700 dark:bg-neutral-900"
     />
   );
 }

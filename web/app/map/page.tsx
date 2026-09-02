@@ -121,13 +121,6 @@ function fmtDay(d: Date): string {
   }).format(d);
 }
 
-// "YYYY-MM-DD" から delta 日ずらした JST 暦日を返す。
-function shiftDay(day: string, delta: number): string {
-  // 正午 JST を基準にすることで DST 等の境界ズレを避ける。
-  const t = Date.parse(`${day}T12:00:00+09:00`);
-  return fmtDay(new Date(t + delta * 86_400_000));
-}
-
 // 選択日の曜日(月〜日)を返す。
 function weekdayJa(day: string): string {
   const t = Date.parse(`${day}T12:00:00+09:00`);
@@ -197,15 +190,6 @@ async function fetchPoints(
   };
 }
 
-// リンク先を組み立てる(deviceId は引き継ぐ)。day 未指定なら全期間。
-function dayHref(day: string, deviceId: string | undefined): string {
-  const p = new URLSearchParams();
-  if (day) p.set("date", day);
-  if (deviceId) p.set("deviceId", deviceId);
-  const qs = p.toString();
-  return qs ? `/map?${qs}` : "/map";
-}
-
 export default async function MapPage({
   searchParams,
 }: {
@@ -242,8 +226,6 @@ export default async function MapPage({
         points={points}
         day={day}
         deviceId={deviceId}
-        prevHref={dayHref(shiftDay(day, -1), deviceId)}
-        nextHref={dayHref(shiftDay(day, 1), deviceId)}
         meta={{
           noFixCount,
           excludedByAccuracy,

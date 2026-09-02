@@ -118,6 +118,10 @@ export default function MapView({
   // 下部の詳細パネル。既定は閉じ、ハンドルの上スワイプ/タップで開く。
   const [detailsOpen, setDetailsOpen] = useState(false);
   const swipeRef = useRef(0);
+  // 枠内プロットを1点ずつ辿るステッパ。現在位置と、その点を示す赤マーカー/吹き出し。
+  const [pointIdx, setPointIdx] = useState(0);
+  const currentMarkerRef = useRef<google.maps.Marker | null>(null);
+  const stepInfoRef = useRef<google.maps.InfoWindow | null>(null);
 
   const gaps = useMemo(() => detectGaps(points), [points]);
 
@@ -130,6 +134,12 @@ export default function MapView({
       }),
     [points, slotStartMs],
   );
+
+  // 枠が変わったらステッパを先頭へ戻す。
+  useEffect(() => {
+    setPointIdx(0);
+  }, [windowPoints]);
+  const stepIdx = windowPoints.length ? Math.min(pointIdx, windowPoints.length - 1) : 0;
 
   // 地図は一度だけ生成する(枠切替では作り直さない)。
   useEffect(() => {
@@ -231,6 +241,48 @@ export default function MapView({
     map.fitBounds(bounds);
   }, [mapReady, windowPoints]);
 
+  // ステッパの現在点を赤マーカーで強調し、時刻を吹き出しで地図に表示する。
+  useEffect(() => {
+    if (!mapReady) return;
+    const map = mapObjRef.current;
+    const g = (window as unknown as { google?: typeof google }).google;
+    if (!map || !g) return;
+
+    if (windowPoints.length === 0) {
+      currentMarkerRef.current?.setMap(null);
+      stepInfoRef.current?.close();
+      return;
+    }
+    const p = windowPoints[stepIdx];
+    const pos = { lat: p.lat, lng: p.lng };
+
+    if (!currentMarkerRef.current) {
+      currentMarkerRef.current = new g.maps.Marker({
+        zIndex: 3000,
+        icon: {
+          path: g.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#dc2626",
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+        },
+      });
+    }
+    currentMarkerRef.current.setMap(map);
+    currentMarkerRef.current.setPosition(pos);
+
+    if (!stepInfoRef.current) {
+      stepInfoRef.current = new g.maps.InfoWindow({ disableAutoPan: true });
+    }
+    stepInfoRef.current.setContent(
+      `<div style="font-size:12px;line-height:1.4">🕐 <b>${jstTime(
+        p.recordedAt,
+      )}</b>（JST）<br>${stepIdx + 1} / ${windowPoints.length} 点目</div>`,
+    );
+    stepInfoRef.current.open({ map, anchor: currentMarkerRef.current });
+  }, [mapReady, windowPoints, stepIdx]);
+
   // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。
   function onHandleDown(e: React.PointerEvent<HTMLDivElement>) {
     swipeRef.current = e.clientY;
@@ -249,7 +301,43 @@ export default function MapView({
   return (
     <div className="flex flex-1 flex-col">
       <div ref={mapRef} className="flex-1" />
-      <div className="border-t border-neutral-200 px-4 pb-2 pt-1 dark:border-neutral-800">
+      <div className="border-t border-neutral-200 px-4 pb-2 pt-2 dark:border-neutral-800">
+        {/* 枠内プロットを1点ずつ辿るステッパ。現在点は地図に赤マーカー+時刻。 */}
+        {windowPoints.length > 0 ? (
+          <div className="mb-2 flex items-center gap-2 text-sm">
+            <button
+              onClick={() => setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1))}
+              className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              disabled={stepIdx <= 0}
+              aria-label="前のプロット"
+            >
+              ◀
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, windowPoints.length - 1)}
+              value={stepIdx}
+              onChange={(e) => setPointIdx(Number(e.target.value))}
+              className="h-2 flex-1 accent-red-600"
+              aria-label="プロットを辿る"
+            />
+            <button
+              onClick={() =>
+                setPointIdx((i) => Math.min(windowPoints.length - 1, Math.min(i, windowPoints.length - 1) + 1))
+              }
+              className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              disabled={stepIdx >= windowPoints.length - 1}
+              aria-label="次のプロット"
+            >
+              ▶
+            </button>
+            <span className="w-28 shrink-0 text-right tabular-nums text-neutral-500">
+              {jstTime(windowPoints[stepIdx].recordedAt)}
+            </span>
+          </div>
+        ) : null}
+
         {/* 上スワイプ/タップで開く詳細ハンドル。 */}
         <div
           onPointerDown={onHandleDown}

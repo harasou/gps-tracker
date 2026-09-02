@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import type { LocationPoint } from "@/lib/types";
-import MapView from "./MapView";
+import MapView, { type MapMeta } from "./MapView";
 import DateInput from "./DateInput";
 
 // 日付ナビと地図をまとめる。地図オブジェクトをここで保持し、
@@ -14,6 +14,7 @@ export default function MapArea({
   deviceId,
   prevHref,
   nextHref,
+  meta,
 }: {
   apiKey: string;
   points: LocationPoint[];
@@ -21,6 +22,7 @@ export default function MapArea({
   deviceId?: string;
   prevHref: string;
   nextHref: string;
+  meta: MapMeta;
 }) {
   const mapObjRef = useRef<google.maps.Map | null>(null);
   const hasMap = Boolean(apiKey) && points.length > 0;
@@ -84,7 +86,7 @@ export default function MapArea({
           この日の位置情報がありません。日付を変えるか「全期間」で直近を表示してください。
         </div>
       ) : (
-        <MapView apiKey={apiKey} points={points} mapObjRef={mapObjRef} />
+        <MapView apiKey={apiKey} points={points} mapObjRef={mapObjRef} meta={meta} />
       )}
     </>
   );

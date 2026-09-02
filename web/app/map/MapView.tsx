@@ -103,18 +103,35 @@ function popupHtml(p: LocationPoint, index: number, total: number): string {
   )}</b>（JST）<br>${index + 1} / ${total} 点目${acc}</div>`;
 }
 
+// 下部の詳細パネルに出すサーバ集計値。
+export interface MapMeta {
+  noFixCount: number;
+  excludedByAccuracy: number;
+  excludedBySpeed: number;
+  excludedBySpike: number;
+  excludedTotal: number;
+  excludedPct: number;
+  rangeLabel: string;
+  deviceId?: string;
+}
+
 export default function MapView({
   apiKey,
   points,
   mapObjRef,
+  meta,
 }: {
   apiKey: string;
   points: LocationPoint[];
   // 地図オブジェクトは親(MapArea)と共有し、ヘッダーの「最新」「全体」ボタンから操作する。
   mapObjRef: React.MutableRefObject<google.maps.Map | null>;
+  meta: MapMeta;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
+  // 下部の詳細パネル(点数・除外内訳など)。既定は閉じ、ハンドルの上スワイプ/タップで開く。
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const swipeRef = useRef(0);
   const travelledRef = useRef<google.maps.Polyline | null>(null);
   const [error, setError] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -352,6 +369,17 @@ export default function MapView({
     dragRef.current = { active: false, startX: 0, startWin: 0, moved: false };
   }
 
+  // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。
+  function onHandleDown(e: React.PointerEvent<HTMLDivElement>) {
+    swipeRef.current = e.clientY;
+  }
+  function onHandleUp(e: React.PointerEvent<HTMLDivElement>) {
+    const dy = e.clientY - swipeRef.current;
+    if (dy < -15) setDetailsOpen(true);
+    else if (dy > 15) setDetailsOpen(false);
+    else setDetailsOpen((o) => !o);
+  }
+
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
   }
@@ -361,16 +389,52 @@ export default function MapView({
   return (
     <div className="flex flex-1 flex-col">
       <div ref={mapRef} className="flex-1" />
-      <div className="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
+      <div className="border-t border-neutral-200 px-4 pb-3 pt-1 dark:border-neutral-800">
+        {/* 上スワイプ/タップで開く詳細ハンドル。 */}
+        <div
+          onPointerDown={onHandleDown}
+          onPointerUp={onHandleUp}
+          className="flex touch-none cursor-pointer select-none flex-col items-center gap-1 pb-1"
+          role="button"
+          aria-expanded={detailsOpen}
+          aria-label="詳細の開閉"
+        >
+          <div className="h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
+          <div className="text-xs text-neutral-500 tabular-nums">
+            {detailsOpen
+              ? "▼ 詳細を閉じる"
+              : `▲ ${points.length}点 · 除外${meta.excludedTotal} · 未取得${gaps.length}件`}
+          </div>
+        </div>
+
+        {/* 詳細パネル(点数・除外内訳・位置不明・日付・device)。 */}
+        {detailsOpen ? (
+          <div className="mb-2 space-y-0.5 rounded bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
+            <div className="tabular-nums">
+              {points.length} 点
+              {meta.noFixCount > 0 ? ` / 位置不明 ${meta.noFixCount} 件` : ""}
+            </div>
+            {meta.excludedTotal > 0 ? (
+              <div className="tabular-nums">
+                除外 {meta.excludedTotal} 点 ({meta.excludedPct}%: 精度
+                {meta.excludedByAccuracy} / 速度{meta.excludedBySpeed} / スパイク
+                {meta.excludedBySpike})
+              </div>
+            ) : null}
+            <div className="tabular-nums">未取得の時間帯: {gaps.length} 件</div>
+            <div>
+              {meta.rangeLabel}
+              {meta.deviceId ? ` / device: ${meta.deviceId}` : ""}
+            </div>
+          </div>
+        ) : null}
+
         <div className="mb-2 flex items-center gap-3 text-sm">
           <span className="font-medium tabular-nums">
             🕐 {current ? jstTime(current.recordedAt) : "--:--:--"}
           </span>
           <span className="tabular-nums text-neutral-500">
             窓 {jstHMms(winStartMs)}–{jstHMms(winStartMs + HOUR_MS)}
-          </span>
-          <span className="ml-auto tabular-nums text-neutral-500">
-            {points.length ? cursorIdx + 1 : 0} / {points.length}
           </span>
         </div>
 

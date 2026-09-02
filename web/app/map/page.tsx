@@ -234,19 +234,7 @@ export default async function MapPage({
   return (
     <main className="flex h-dvh flex-col">
       <header className="border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold">GPS Tracker — 軌跡</h1>
-          <span className="text-sm text-neutral-500">
-            {points.length} 点
-            {noFixCount > 0 ? ` / 位置不明 ${noFixCount} 件` : ""}
-            {excludedTotal > 0
-              ? ` / 除外 ${excludedTotal} 点 (${excludedPct}%: 精度${excludedByAccuracy}/速度${excludedBySpeed}/スパイク${excludedBySpike})`
-              : ""}{" "}
-            / {rangeLabel}
-            {deviceId ? ` / device: ${deviceId}` : ""}
-          </span>
-        </div>
-
+        <h1 className="text-lg font-semibold">GPS Tracker — 軌跡</h1>
       </header>
 
       <MapArea
@@ -256,6 +244,16 @@ export default async function MapPage({
         deviceId={deviceId}
         prevHref={dayHref(shiftDay(day, -1), deviceId)}
         nextHref={dayHref(shiftDay(day, 1), deviceId)}
+        meta={{
+          noFixCount,
+          excludedByAccuracy,
+          excludedBySpeed,
+          excludedBySpike,
+          excludedTotal,
+          excludedPct,
+          rangeLabel,
+          deviceId,
+        }}
       />
     </main>
   );

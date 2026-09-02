@@ -129,9 +129,10 @@ export default function MapView({
         const path = points.map((p) => ({ lat: p.lat, lng: p.lng }));
         const last = path[path.length - 1];
 
+        // 初期状態は「今」(最新地点に寄る)。全体表示は「全体」ボタンで。
         const map = new g.maps.Map(mapRef.current, {
           center: last,
-          zoom: 15,
+          zoom: 17,
           mapTypeControl: true,
           streetViewControl: false,
         });
@@ -222,14 +223,6 @@ export default function MapView({
           },
         });
 
-        // 全点が収まるように調整。寄りすぎ防止に最大ズームを制限。
-        const bounds = new g.maps.LatLngBounds();
-        path.forEach((pt) => bounds.extend(pt));
-        map.fitBounds(bounds);
-        g.maps.event.addListenerOnce(map, "idle", () => {
-          const z = map.getZoom();
-          if (z !== undefined && z > 17) map.setZoom(17);
-        });
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);

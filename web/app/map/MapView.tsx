@@ -254,6 +254,30 @@ export default function MapView({
     map.panTo(pos);
   }, [cursor, points]);
 
+  // 「今」: 最新(現在)地点に寄る。カメラのみ動かす(データ・スクラバーは変えない)。
+  function zoomToNow() {
+    const map = mapObjRef.current;
+    if (!map || points.length === 0) return;
+    const last = points[points.length - 1];
+    map.panTo({ lat: last.lat, lng: last.lng });
+    map.setZoom(17);
+  }
+
+  // 「全体」: その日の軌跡全体が収まるよう引く(初期表示と同じ fitBounds)。
+  function zoomToDay() {
+    const map = mapObjRef.current;
+    const g = (window as unknown as { google?: typeof google }).google;
+    if (!map || !g || points.length === 0) return;
+    const bounds = new g.maps.LatLngBounds();
+    points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+    map.fitBounds(bounds);
+    // 寄りすぎ防止に最大ズームを制限(初期表示と同じ挙動)。
+    g.maps.event.addListenerOnce(map, "idle", () => {
+      const z = map.getZoom();
+      if (z !== undefined && z > 17) map.setZoom(17);
+    });
+  }
+
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
   }
@@ -262,7 +286,24 @@ export default function MapView({
 
   return (
     <div className="flex flex-1 flex-col">
-      <div ref={mapRef} className="flex-1" />
+      <div className="relative flex-1">
+        <div ref={mapRef} className="absolute inset-0" />
+        {/* 地図上部中央のカメラ操作。今=最新に寄る / 全体=1日全体に引く。 */}
+        <div className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 gap-1">
+          <button
+            onClick={zoomToNow}
+            className="rounded bg-white/95 px-3 py-1.5 text-sm font-medium shadow hover:bg-white dark:bg-neutral-800/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
+          >
+            今
+          </button>
+          <button
+            onClick={zoomToDay}
+            className="rounded bg-white/95 px-3 py-1.5 text-sm font-medium shadow hover:bg-white dark:bg-neutral-800/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
+          >
+            全体
+          </button>
+        </div>
+      </div>
       <div className="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
         <div className="flex items-center gap-3 text-sm">
           <span className="w-28 shrink-0 font-medium tabular-nums">

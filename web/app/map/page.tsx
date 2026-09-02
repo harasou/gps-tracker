@@ -193,13 +193,18 @@ async function fetchPoints(
 export default async function MapPage({
   searchParams,
 }: {
-  searchParams: Promise<{ deviceId?: string; date?: string }>;
+  searchParams: Promise<{ deviceId?: string; date?: string; slot?: string }>;
 }) {
-  const { deviceId, date } = await searchParams;
+  const { deviceId, date, slot } = await searchParams;
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
   const today = jstDay(0);
   // 日付未指定なら今日を表示する。
   const day = date && DAY_RE.test(date) ? date : today;
+  // 矢印で日をまたいだ時の着地枠(0..47)。無ければ最新枠。
+  const initialSlotIndex =
+    slot !== undefined && /^\d{1,2}$/.test(slot)
+      ? Math.min(47, Math.max(0, parseInt(slot, 10)))
+      : undefined;
   const {
     points,
     noFixCount,
@@ -227,6 +232,7 @@ export default async function MapPage({
         day={day}
         today={today}
         deviceId={deviceId}
+        initialSlotIndex={initialSlotIndex}
         meta={{
           noFixCount,
           excludedByAccuracy,

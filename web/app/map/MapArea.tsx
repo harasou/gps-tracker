@@ -1,10 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
 import MapView, { type MapMeta, SLOT_MS, DAY_MS, jstHMms } from "./MapView";
 import DateInput from "./DateInput";
+
+// "YYYY-MM-DD" から delta 日ずらした JST 暦日を返す。
+function shiftDay(day: string, delta: number): string {
+  const t = Date.parse(`${day}T12:00:00+09:00`) + delta * DAY_MS;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(t));
+}
 
 // 地図と、その下の時間ナビ(日付+30分枠)をまとめる。
 // 30 分枠の選択状態はここで持ち、地図(MapView)へ渡す。
@@ -14,6 +25,7 @@ export default function MapArea({
   day,
   today,
   deviceId,
+  initialSlotIndex,
   meta,
 }: {
   apiKey: string;
@@ -21,6 +33,8 @@ export default function MapArea({
   day: string;
   today: string;
   deviceId?: string;
+  // 矢印で日をまたいだ時の着地枠(0..47)。無ければ最新枠。
+  initialSlotIndex?: number;
   meta: MapMeta;
 }) {
   const router = useRouter();
@@ -29,11 +43,18 @@ export default function MapArea({
   const lastMs = points.length ? Date.parse(points[points.length - 1].recordedAt) : dayStartMs;
   const slotOf = (ms: number) => dayStartMs + Math.floor((ms - dayStartMs) / SLOT_MS) * SLOT_MS;
 
-  // 選択中の 30 分枠(開始 ms)。初期は最新点の枠。
-  const [slotStartMs, setSlotStartMs] = useState<number>(slotOf(lastMs));
+  // 選択中の 30 分枠(開始 ms)。URL に slot 指定があればそれ、無ければ最新点の枠。
+  const [slotStartMs, setSlotStartMs] = useState<number>(
+    initialSlotIndex != null ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
+  );
 
-  // 表示対象(日)が変わったら最新枠へ戻す。
+  // 初回マウントは上の初期値(URL の slot 指定)を尊重。以降(同日データ再取得など)は最新枠へ。
+  const inited = useRef(false);
   useEffect(() => {
+    if (!inited.current) {
+      inited.current = true;
+      return;
+    }
     setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
   }, [points, dayStartMs, lastMs]);
 
@@ -49,8 +70,30 @@ export default function MapArea({
 
   const btn =
     "rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
-  const atFirst = slotStartMs <= dayStartMs;
   const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
+  // 今日の最終枠より先(未来)へは進めない。
+  const nextBlocked = atLast && day >= today;
+
+  // 別の日付の指定枠へ遷移する(矢印の日またぎ)。
+  function navTo(d: string, slotIdx: number) {
+    const p = new URLSearchParams();
+    p.set("date", d);
+    p.set("slot", String(slotIdx));
+    if (deviceId) p.set("deviceId", deviceId);
+    router.push(`/map?${p.toString()}`);
+  }
+
+  // ◀: 枠内は −30分。先頭(00:00)なら前日の 23:30 へ。
+  function goPrev() {
+    if (slotStartMs > dayStartMs) setSlotStartMs(slotStartMs - SLOT_MS);
+    else navTo(shiftDay(day, -1), 47);
+  }
+
+  // ▶: 枠内は +30分。末尾(23:30)なら翌日の 00:00 へ(未来日は不可)。
+  function goNext() {
+    if (!atLast) setSlotStartMs(slotStartMs + SLOT_MS);
+    else if (!nextBlocked) navTo(shiftDay(day, 1), 0);
+  }
 
   // 「更新」= 今へ。今日でなければ今日へ遷移、今日なら再取得して最新枠へ。
   function onUpdate() {
@@ -83,12 +126,7 @@ export default function MapArea({
 
       {/* 下部ナビ: 左に ◀ 日付 時間 ▶ / 右に 更新。date はネイティブカレンダー。 */}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
-        <button
-          onClick={() => setSlotStartMs(Math.max(dayStartMs, slotStartMs - SLOT_MS))}
-          className={`${btn} shrink-0`}
-          disabled={atFirst}
-          aria-label="30分前"
-        >
+        <button onClick={goPrev} className={`${btn} shrink-0`} aria-label="30分前(前日へ繰越)">
           ◀
         </button>
         <DateInput current={day} deviceId={deviceId} />
@@ -109,12 +147,10 @@ export default function MapArea({
           })}
         </select>
         <button
-          onClick={() =>
-            setSlotStartMs(Math.min(dayStartMs + DAY_MS - SLOT_MS, slotStartMs + SLOT_MS))
-          }
+          onClick={goNext}
           className={`${btn} shrink-0`}
-          disabled={atLast}
-          aria-label="30分後"
+          disabled={nextBlocked}
+          aria-label="30分後(翌日へ繰越)"
         >
           ▶
         </button>

@@ -67,11 +67,11 @@ export default function MapArea({
         </a>
         {hasMap ? (
           <div className="ml-auto flex gap-2">
-            <button onClick={zoomToNow} className={btn}>
-              最新
-            </button>
             <button onClick={zoomToDay} className={btn}>
               全体
+            </button>
+            <button onClick={zoomToNow} className={btn}>
+              更新
             </button>
           </div>
         ) : null}

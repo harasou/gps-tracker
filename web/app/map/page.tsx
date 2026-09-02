@@ -225,6 +225,7 @@ export default async function MapPage({
         apiKey={apiKey}
         points={points}
         day={day}
+        today={today}
         deviceId={deviceId}
         meta={{
           noFixCount,

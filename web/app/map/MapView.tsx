@@ -196,6 +196,19 @@ export default function MapView({
     return segs;
   }, [points]);
 
+  // 未取得(ギャップ)区間 = その日の全体から covered(取得あり)を除いた範囲。
+  // 先頭の未取得・末尾の未取得も含む。ここだけに赤い縦線を描く。
+  const noData = useMemo(() => {
+    const segs: { s: number; e: number }[] = [];
+    let prev = dayStartMs;
+    for (const c of covered) {
+      if (c.s > prev) segs.push({ s: prev, e: c.s });
+      prev = Math.max(prev, c.e);
+    }
+    if (prev < dayEndMs) segs.push({ s: prev, e: dayEndMs });
+    return segs;
+  }, [covered, dayStartMs, dayEndMs]);
+
   // ms → バー上の左端からの % 位置。
   const pct = (ms: number) => clamp(((ms - dayStartMs) / DAY_MS) * 100, 0, 100);
 
@@ -451,19 +464,24 @@ export default function MapView({
           aria-label="時間スクラバー(1日分)"
           aria-valuetext={current ? jstTime(current.recordedAt) : undefined}
         >
-          {/* 未取得を表す赤い縦線パターン(全域)。青区間で覆われた所は取得あり。 */}
-          <div
-            className="pointer-events-none absolute inset-0"
-            style={{
-              backgroundImage:
-                "repeating-linear-gradient(90deg, rgba(220,38,38,0.35) 0 1px, transparent 1px 7px)",
-            }}
-          />
-          {/* 取得あり区間(青)。 */}
+          {/* 未取得(ギャップ)区間だけを赤い縦線で表示。データのある所には出ない。 */}
+          {noData.map((c, i) => (
+            <div
+              key={`g${i}`}
+              className="pointer-events-none absolute inset-y-0"
+              style={{
+                left: `${pct(c.s)}%`,
+                width: `${Math.max(pct(c.e) - pct(c.s), 0.15)}%`,
+                backgroundImage:
+                  "repeating-linear-gradient(90deg, rgba(220,38,38,0.5) 0 1px, transparent 1px 7px)",
+              }}
+            />
+          ))}
+          {/* 取得あり区間(青)。全高・不透明でデータ部を覆う。 */}
           {covered.map((c, i) => (
             <div
               key={i}
-              className="pointer-events-none absolute top-1 bottom-1 rounded-sm bg-blue-500/80"
+              className="pointer-events-none absolute inset-y-0 rounded-sm bg-blue-500"
               style={{ left: `${pct(c.s)}%`, width: `${Math.max(pct(c.e) - pct(c.s), 0.3)}%` }}
             />
           ))}

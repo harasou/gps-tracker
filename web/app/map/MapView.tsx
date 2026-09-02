@@ -343,9 +343,6 @@ export default function MapView({
             >
               ▶
             </button>
-            <span className="w-28 shrink-0 text-right tabular-nums text-neutral-500">
-              {jstTime(windowPoints[stepIdx].recordedAt)}
-            </span>
           </div>
         ) : null}
 

@@ -4,6 +4,10 @@ import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
 
+// 選択できる時間枠(30分)。
+export const SLOT_MS = 30 * 60 * 1000;
+const DAY_MS = 86_400_000;
+
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
 let mapsPromise: Promise<void> | null = null;
 
@@ -37,10 +41,6 @@ function jstTime(iso: string): string {
   }).format(new Date(iso));
 }
 
-const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
 // epoch ms を JST の "HH:mm" に整形。
 function jstHMms(ms: number): string {
   return new Intl.DateTimeFormat("ja-JP", {
@@ -50,24 +50,11 @@ function jstHMms(ms: number): string {
   }).format(new Date(ms));
 }
 
-// その時刻が属する JST 暦日の 00:00(epoch ms)。日バーの左端に使う。
-function jstDayStartMs(iso: string): number {
-  const ymd = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(iso));
-  return Date.parse(`${ymd}T00:00:00+09:00`);
-}
-
-// 記録が飛んでいる区間(前後の点の時間差が通常より大きい)。
+// 記録が飛んでいる区間(前後の点の時間差が通常より大きい)。日次サマリ用。
 interface Gap {
   fromIdx: number;
   toIdx: number;
   ms: number;
-  fromTime: string;
-  toTime: string;
 }
 
 // 連続2点の時間差が「中央値×3」かつ「最低3分」を超えたら記録なしとみなす。
@@ -83,15 +70,7 @@ function detectGaps(points: LocationPoint[]): Gap[] {
   const gaps: Gap[] = [];
   for (let i = 1; i < times.length; i++) {
     const d = times[i] - times[i - 1];
-    if (d > threshold) {
-      gaps.push({
-        fromIdx: i - 1,
-        toIdx: i,
-        ms: d,
-        fromTime: points[i - 1].recordedAt,
-        toTime: points[i].recordedAt,
-      });
-    }
+    if (d > threshold) gaps.push({ fromIdx: i - 1, toIdx: i, ms: d });
   }
   return gaps;
 }
@@ -118,271 +97,168 @@ export interface MapMeta {
 export default function MapView({
   apiKey,
   points,
-  mapObjRef,
   meta,
+  day,
 }: {
   apiKey: string;
   points: LocationPoint[];
-  // 地図オブジェクトは親(MapArea)と共有し、ヘッダーの「最新」「全体」ボタンから操作する。
-  mapObjRef: React.MutableRefObject<google.maps.Map | null>;
   meta: MapMeta;
+  // 表示中の JST 暦日 "YYYY-MM-DD"。30 分枠の基準(その日の 00:00)に使う。
+  day: string;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
-  // 下部の詳細パネル(点数・除外内訳など)。既定は閉じ、ハンドルの上スワイプ/タップで開く。
+  const mapObjRef = useRef<google.maps.Map | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // 現在描画中のオーバーレイ(枠切替のたびに消して描き直す)。
+  const plotRef = useRef<{
+    overlays: (google.maps.Polyline | google.maps.Marker)[];
+    info: google.maps.InfoWindow | null;
+  }>({ overlays: [], info: null });
+  // 下部の詳細パネル。既定は閉じ、ハンドルの上スワイプ/タップで開く。
   const [detailsOpen, setDetailsOpen] = useState(false);
   const swipeRef = useRef(0);
-  // 通過済み軌跡はギャップで分断するため、連続区間(run)ごとにポリラインを持つ。
-  const travelledRef = useRef<{ indices: number[]; line: google.maps.Polyline }[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const barRef = useRef<HTMLDivElement>(null);
-  // 窓ドラッグの一時状態(再描画を挟まないので ref に持つ)。
-  const dragRef = useRef({ active: false, startX: 0, startWin: 0, moved: false });
 
   const gaps = useMemo(() => detectGaps(points), [points]);
 
-  // 日バーの範囲(その日の JST 00:00〜翌 00:00)。
-  const dayStartMs = useMemo(
-    () => (points.length ? jstDayStartMs(points[0].recordedAt) : 0),
-    [points],
-  );
-  const dayEndMs = dayStartMs + DAY_MS;
+  // その日の 00:00(JST) と 各点時刻。
+  const dayStartMs = useMemo(() => Date.parse(`${day}T00:00:00+09:00`), [day]);
   const lastMs = points.length ? Date.parse(points[points.length - 1].recordedAt) : dayStartMs;
+  // ある時刻が属する 30 分枠の開始 ms。
+  const slotOf = (ms: number) =>
+    dayStartMs + Math.floor((ms - dayStartMs) / SLOT_MS) * SLOT_MS;
 
-  // スクラバーの現在時刻(ms)と、1時間窓の開始時刻(ms)。初期は最新点。
-  const [cursorMs, setCursorMs] = useState<number>(lastMs);
-  const [winStartMs, setWinStartMs] = useState<number>(
-    clamp(lastMs - HOUR_MS / 2, dayStartMs, dayEndMs - HOUR_MS),
+  // 選択中の 30 分枠(開始 ms)。初期は最新点の枠。
+  const [slotStartMs, setSlotStartMs] = useState<number>(slotOf(lastMs));
+
+  // 表示対象(日)が変わったら最新枠へ戻す。
+  useEffect(() => {
+    setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
+  }, [points, dayStartMs, lastMs]);
+
+  // 枠ごとの点数(ドロップダウンに出す)。
+  const slotCounts = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const p of points) {
+      const idx = Math.floor((Date.parse(p.recordedAt) - dayStartMs) / SLOT_MS);
+      m.set(idx, (m.get(idx) ?? 0) + 1);
+    }
+    return m;
+  }, [points, dayStartMs]);
+
+  // 選択中の 30 分枠に入る点だけ。
+  const windowPoints = useMemo(
+    () =>
+      points.filter((p) => {
+        const t = Date.parse(p.recordedAt);
+        return t >= slotStartMs && t < slotStartMs + SLOT_MS;
+      }),
+    [points, slotStartMs],
   );
 
-  // 表示対象が変わったら最新へ戻す。
-  useEffect(() => {
-    setCursorMs(lastMs);
-    setWinStartMs(clamp(lastMs - HOUR_MS / 2, dayStartMs, dayEndMs - HOUR_MS));
-  }, [points, lastMs, dayStartMs, dayEndMs]);
-
-  // cursorMs に最も近い点の index(地図の赤マーカー・通過済み軌跡が指す点)。
-  const cursorIdx = useMemo(() => {
-    let best = 0;
-    let bestD = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const d = Math.abs(Date.parse(points[i].recordedAt) - cursorMs);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    }
-    return best;
-  }, [points, cursorMs]);
-
-  // 日バーに描く「取得あり」区間(青)。連続点の時間差がしきい値以下を採用し、
-  // 隣接する採用区間はつなげる。残り(=未取得)は背景の赤い縦線で見える。
-  const covered = useMemo(() => {
-    const t = points.map((p) => Date.parse(p.recordedAt));
-    if (t.length < 2) return [] as { s: number; e: number }[];
-    const deltas: number[] = [];
-    for (let i = 1; i < t.length; i++) deltas.push(t[i] - t[i - 1]);
-    const sorted = [...deltas].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] || 60_000;
-    const threshold = Math.max(median * 3, 180_000);
-    const segs: { s: number; e: number }[] = [];
-    for (let i = 1; i < t.length; i++) {
-      if (t[i] - t[i - 1] <= threshold) {
-        const prev = segs[segs.length - 1];
-        if (prev && prev.e === t[i - 1]) prev.e = t[i];
-        else segs.push({ s: t[i - 1], e: t[i] });
-      }
-    }
-    return segs;
-  }, [points]);
-
-  // 未取得(ギャップ)区間 = その日の全体から covered(取得あり)を除いた範囲。
-  // 先頭の未取得・末尾の未取得も含む。ここだけに赤い縦線を描く。
-  const noData = useMemo(() => {
-    const segs: { s: number; e: number }[] = [];
-    let prev = dayStartMs;
-    for (const c of covered) {
-      if (c.s > prev) segs.push({ s: prev, e: c.s });
-      prev = Math.max(prev, c.e);
-    }
-    if (prev < dayEndMs) segs.push({ s: prev, e: dayEndMs });
-    return segs;
-  }, [covered, dayStartMs, dayEndMs]);
-
-  // ms → バー上の左端からの % 位置。
-  const pct = (ms: number) => clamp(((ms - dayStartMs) / DAY_MS) * 100, 0, 100);
-
-  // 地図の初期化。
+  // 地図は一度だけ生成する(枠切替では作り直さない)。
   useEffect(() => {
     let cancelled = false;
-
     loadGoogleMaps(apiKey)
       .then(() => {
         if (cancelled || !mapRef.current) return;
         const g = (window as unknown as { google: typeof google }).google;
-
-        const path = points.map((p) => ({ lat: p.lat, lng: p.lng }));
-        const last = path[path.length - 1];
-
-        // 初期状態は「今」(最新地点に寄る)。全体表示は「全体」ボタンで。
+        const center = points.length
+          ? { lat: points[points.length - 1].lat, lng: points[points.length - 1].lng }
+          : { lat: 35.681, lng: 139.767 };
         const map = new g.maps.Map(mapRef.current, {
-          center: last,
-          zoom: 17,
+          center,
+          zoom: 15,
           mapTypeControl: true,
           streetViewControl: false,
         });
         mapObjRef.current = map;
-
-        // ギャップ(記録なし区間)で軌跡を分断する。ギャップをまたぐ線は引かない。
-        // gaps の各要素は点 fromIdx→toIdx(=fromIdx+1) 間がギャップ。その手前で run を切る。
-        const breakAfter = new Set(gaps.map((gp) => gp.fromIdx));
-        const runs: number[][] = [];
-        let cur: number[] = [];
-        for (let i = 0; i < points.length; i++) {
-          cur.push(i);
-          if (breakAfter.has(i)) {
-            runs.push(cur);
-            cur = [];
-          }
-        }
-        if (cur.length) runs.push(cur);
-
-        // 全体の軌跡(薄い青)。区間ごとに描画(ギャップはつながない)。
-        runs.forEach((run) => {
-          if (run.length < 2) return;
-          new g.maps.Polyline({
-            path: run.map((i) => ({ lat: points[i].lat, lng: points[i].lng })),
-            geodesic: true,
-            strokeColor: "#93c5fd",
-            strokeOpacity: 0.9,
-            strokeWeight: 3,
-            map,
-          });
-        });
-
-        // 通過済みの軌跡(濃い青)。区間ごとに空のポリラインを用意し、スクラバーで長さを更新。
-        travelledRef.current = runs.map((run) => ({
-          indices: run,
-          line: new g.maps.Polyline({
-            path: [],
-            geodesic: true,
-            strokeColor: "#2563eb",
-            strokeOpacity: 0.9,
-            strokeWeight: 4,
-            map,
-          }),
-        }));
-
-        // 各点の丸マーカー(クリックで時刻)。多い場合は最大800個に間引く。
-        const info = new g.maps.InfoWindow();
-        const MAX_MARKERS = 800;
-        const step = Math.max(1, Math.ceil(points.length / MAX_MARKERS));
-        for (let i = 0; i < points.length; i += step) {
-          const p = points[i];
-          const marker = new g.maps.Marker({
-            position: { lat: p.lat, lng: p.lng },
-            map,
-            icon: {
-              path: g.maps.SymbolPath.CIRCLE,
-              scale: 3.5,
-              fillColor: "#2563eb",
-              fillOpacity: 0.8,
-              strokeColor: "#ffffff",
-              strokeWeight: 1,
-            },
-            title: `${jstTime(p.recordedAt)}（JST）`,
-          });
-          marker.addListener("click", () => {
-            info.setContent(popupHtml(p, i, points.length));
-            info.open({ map, anchor: marker });
-          });
-        }
-
-        // スクラバーの現在位置を示す赤い大きめマーカー。
-        cursorMarkerRef.current = new g.maps.Marker({
-          position: last,
-          map,
-          zIndex: 2000,
-          icon: {
-            path: g.maps.SymbolPath.CIRCLE,
-            scale: 8,
-            fillColor: "#dc2626",
-            fillOpacity: 1,
-            strokeColor: "#ffffff",
-            strokeWeight: 2,
-          },
-        });
-
+        plotRef.current.info = new g.maps.InfoWindow();
+        setMapReady(true);
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);
       });
-
     return () => {
       cancelled = true;
     };
-  }, [apiKey, points, gaps]);
+    // 地図生成は一度きり。points は初期センターにのみ使う。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
 
-  // スクラバー移動時に、赤マーカーと通過済み軌跡を更新する。
+  // 選択中の 30 分枠の点だけを描画し、その範囲にフィットする。
   useEffect(() => {
+    if (!mapReady) return;
     const map = mapObjRef.current;
-    const cm = cursorMarkerRef.current;
-    const runs = travelledRef.current;
-    if (!map || !cm) return;
-    const p = points[cursorIdx];
-    if (!p) return;
-    const pos = { lat: p.lat, lng: p.lng };
-    cm.setPosition(pos);
-    // 区間ごとに、カーソルまでの点だけを濃い青で描く(ギャップはまたがない)。
-    runs.forEach(({ indices, line }) => {
-      const sub = indices
-        .filter((i) => i <= cursorIdx)
-        .map((i) => ({ lat: points[i].lat, lng: points[i].lng }));
-      line.setPath(sub);
-    });
-    map.panTo(pos);
-  }, [cursorIdx, points]);
+    const g = (window as unknown as { google?: typeof google }).google;
+    if (!map || !g) return;
+    const info = plotRef.current.info;
 
-  // clientX → その位置の時刻(ms)。
-  function timeAtX(clientX: number): number {
-    const el = barRef.current;
-    if (!el) return dayStartMs;
-    const r = el.getBoundingClientRect();
-    return dayStartMs + clamp((clientX - r.left) / r.width, 0, 1) * DAY_MS;
-  }
+    // 既存オーバーレイを消す。
+    plotRef.current.overlays.forEach((o) => o.setMap(null));
+    plotRef.current.overlays = [];
+    if (windowPoints.length === 0) return;
 
-  // 日バー上の操作。窓の上=ドラッグで窓移動/クリックでカーソル、窓の外=そこへ窓とカーソルを移動。
-  function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    const t = timeAtX(e.clientX);
-    e.currentTarget.setPointerCapture(e.pointerId);
-    if (t >= winStartMs && t <= winStartMs + HOUR_MS) {
-      dragRef.current = { active: true, startX: e.clientX, startWin: winStartMs, moved: false };
-    } else {
-      const ns = clamp(t - HOUR_MS / 2, dayStartMs, dayEndMs - HOUR_MS);
-      setWinStartMs(ns);
-      setCursorMs(clamp(t, ns, ns + HOUR_MS));
+    // 3 分超の切れ目で run に分割(ギャップをまたぐ線は引かない)。
+    const runs: LocationPoint[][] = [];
+    let cur: LocationPoint[] = [];
+    for (let i = 0; i < windowPoints.length; i++) {
+      if (
+        i > 0 &&
+        Date.parse(windowPoints[i].recordedAt) - Date.parse(windowPoints[i - 1].recordedAt) >
+          180_000
+      ) {
+        runs.push(cur);
+        cur = [];
+      }
+      cur.push(windowPoints[i]);
     }
-  }
+    if (cur.length) runs.push(cur);
 
-  function onBarPointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    const d = dragRef.current;
-    if (!d.active) return;
-    if (Math.abs(e.clientX - d.startX) > 3) d.moved = true;
-    if (!d.moved) return;
-    const el = barRef.current;
-    if (!el) return;
-    const deltaMs = ((e.clientX - d.startX) / el.getBoundingClientRect().width) * DAY_MS;
-    const ns = clamp(d.startWin + deltaMs, dayStartMs, dayEndMs - HOUR_MS);
-    setWinStartMs(ns);
-    setCursorMs((c) => clamp(c, ns, ns + HOUR_MS));
-  }
+    runs.forEach((run) => {
+      if (run.length < 2) return;
+      const line = new g.maps.Polyline({
+        path: run.map((p) => ({ lat: p.lat, lng: p.lng })),
+        geodesic: true,
+        strokeColor: "#2563eb",
+        strokeOpacity: 0.9,
+        strokeWeight: 4,
+        map,
+      });
+      plotRef.current.overlays.push(line);
+    });
 
-  function onBarPointerUp(e: React.PointerEvent<HTMLDivElement>) {
-    const d = dragRef.current;
-    // ドラッグせずに窓の上を離した=クリック → その位置へカーソル。
-    if (d.active && !d.moved) setCursorMs(timeAtX(e.clientX));
-    dragRef.current = { active: false, startX: 0, startWin: 0, moved: false };
-  }
+    windowPoints.forEach((p, i) => {
+      const marker = new g.maps.Marker({
+        position: { lat: p.lat, lng: p.lng },
+        map,
+        icon: {
+          path: g.maps.SymbolPath.CIRCLE,
+          scale: 4,
+          fillColor: "#2563eb",
+          fillOpacity: 0.9,
+          strokeColor: "#ffffff",
+          strokeWeight: 1,
+        },
+        title: `${jstTime(p.recordedAt)}（JST）`,
+      });
+      marker.addListener("click", () => {
+        if (!info) return;
+        info.setContent(popupHtml(p, i, windowPoints.length));
+        info.open({ map, anchor: marker });
+      });
+      plotRef.current.overlays.push(marker);
+    });
+
+    // 枠の点が収まるようにフィット(寄りすぎ防止に最大ズームを制限)。
+    const bounds = new g.maps.LatLngBounds();
+    windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+    map.fitBounds(bounds);
+    g.maps.event.addListenerOnce(map, "idle", () => {
+      const z = map.getZoom();
+      if (z !== undefined && z > 17) map.setZoom(17);
+    });
+  }, [mapReady, windowPoints]);
 
   // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。
   function onHandleDown(e: React.PointerEvent<HTMLDivElement>) {
@@ -399,17 +275,66 @@ export default function MapView({
     return <div className="p-6 text-red-600">{error}</div>;
   }
 
-  const current = points[cursorIdx];
+  const btn =
+    "rounded border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
+  const atFirst = slotStartMs <= dayStartMs;
+  const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
 
   return (
     <div className="flex flex-1 flex-col">
       <div ref={mapRef} className="flex-1" />
-      <div className="border-t border-neutral-200 px-4 pb-3 pt-1 dark:border-neutral-800">
+      <div className="border-t border-neutral-200 px-4 pb-3 pt-2 dark:border-neutral-800">
+        {/* 時間ナビ(30分枠)。更新=最新枠へ / ← → で ±30分 / ドロップダウンで選択。 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setSlotStartMs(slotOf(lastMs))}
+            className={btn}
+            aria-label="最新の時間帯へ"
+          >
+            更新
+          </button>
+          <button
+            onClick={() => setSlotStartMs(Math.max(dayStartMs, slotStartMs - SLOT_MS))}
+            className={btn}
+            disabled={atFirst}
+            aria-label="30分前"
+          >
+            ◀
+          </button>
+          <select
+            value={slotStartMs}
+            onChange={(e) => setSlotStartMs(Number(e.target.value))}
+            className="rounded border border-neutral-300 px-2 py-1.5 text-sm tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
+            aria-label="時間帯(30分)を選択"
+          >
+            {Array.from({ length: 48 }, (_, i) => {
+              const ms = dayStartMs + i * SLOT_MS;
+              const n = slotCounts.get(i) ?? 0;
+              return (
+                <option key={i} value={ms}>
+                  {jstHMms(ms)}–{jstHMms(ms + SLOT_MS)}
+                  {n > 0 ? ` (${n})` : ""}
+                </option>
+              );
+            })}
+          </select>
+          <button
+            onClick={() =>
+              setSlotStartMs(Math.min(dayStartMs + DAY_MS - SLOT_MS, slotStartMs + SLOT_MS))
+            }
+            className={btn}
+            disabled={atLast}
+            aria-label="30分後"
+          >
+            ▶
+          </button>
+        </div>
+
         {/* 上スワイプ/タップで開く詳細ハンドル。 */}
         <div
           onPointerDown={onHandleDown}
           onPointerUp={onHandleUp}
-          className="flex touch-none cursor-pointer select-none flex-col items-center gap-1 pb-1"
+          className="mt-2 flex touch-none cursor-pointer select-none flex-col items-center gap-1"
           role="button"
           aria-expanded={detailsOpen}
           aria-label="詳細の開閉"
@@ -418,13 +343,13 @@ export default function MapView({
           <div className="text-xs text-neutral-500 tabular-nums">
             {detailsOpen
               ? "▼ 詳細を閉じる"
-              : `▲ ${points.length}点 · 除外${meta.excludedTotal} · 未取得${gaps.length}件`}
+              : `▲ この30分 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
           </div>
         </div>
 
-        {/* 詳細パネル(点数・除外内訳・位置不明・日付・device)。 */}
+        {/* 詳細パネル(日次: 点数・除外内訳・位置不明・日付・device)。 */}
         {detailsOpen ? (
-          <div className="mb-2 space-y-0.5 rounded bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
+          <div className="mt-1 space-y-0.5 rounded bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
             <div className="tabular-nums">
               {points.length} 点
               {meta.noFixCount > 0 ? ` / 位置不明 ${meta.noFixCount} 件` : ""}
@@ -443,100 +368,6 @@ export default function MapView({
             </div>
           </div>
         ) : null}
-
-        <div className="mb-2 flex items-center gap-3 text-sm">
-          <span className="font-medium tabular-nums">
-            🕐 {current ? jstTime(current.recordedAt) : "--:--:--"}
-          </span>
-          <span className="tabular-nums text-neutral-500">
-            窓 {jstHMms(winStartMs)}–{jstHMms(winStartMs + HOUR_MS)}
-          </span>
-        </div>
-
-        {/* 1日分(00–24h)のバー。背景の赤い縦線=未取得、青=取得あり、赤枠=1時間窓、赤線=現在位置。 */}
-        <div
-          ref={barRef}
-          onPointerDown={onBarPointerDown}
-          onPointerMove={onBarPointerMove}
-          onPointerUp={onBarPointerUp}
-          className="relative h-9 w-full touch-none select-none overflow-hidden rounded bg-neutral-100 dark:bg-neutral-800"
-          role="slider"
-          aria-label="時間スクラバー(1日分)"
-          aria-valuetext={current ? jstTime(current.recordedAt) : undefined}
-        >
-          {/* 未取得(ギャップ)区間だけを赤い縦線で表示。データのある所には出ない。 */}
-          {noData.map((c, i) => (
-            <div
-              key={`g${i}`}
-              className="pointer-events-none absolute inset-y-0"
-              style={{
-                left: `${pct(c.s)}%`,
-                width: `${Math.max(pct(c.e) - pct(c.s), 0.15)}%`,
-                backgroundImage:
-                  "repeating-linear-gradient(90deg, rgba(220,38,38,0.5) 0 1px, transparent 1px 7px)",
-              }}
-            />
-          ))}
-          {/* 取得あり区間(青)。全高・不透明でデータ部を覆う。 */}
-          {covered.map((c, i) => (
-            <div
-              key={i}
-              className="pointer-events-none absolute inset-y-0 rounded-sm bg-blue-500"
-              style={{ left: `${pct(c.s)}%`, width: `${Math.max(pct(c.e) - pct(c.s), 0.3)}%` }}
-            />
-          ))}
-          {/* 3時間ごとの目盛。 */}
-          {[3, 6, 9, 12, 15, 18, 21].map((h) => (
-            <div
-              key={h}
-              className="pointer-events-none absolute top-0 bottom-0 w-px bg-neutral-300/70 dark:bg-neutral-600/70"
-              style={{ left: `${(h / 24) * 100}%` }}
-            />
-          ))}
-          {/* 1時間窓(ドラッグで移動)。 */}
-          <div
-            className="pointer-events-none absolute top-0 bottom-0 rounded border-2 border-red-500/80 bg-red-500/10"
-            style={{ left: `${pct(winStartMs)}%`, width: `${(HOUR_MS / DAY_MS) * 100}%` }}
-          />
-          {/* 現在位置(カーソル)。 */}
-          <div
-            className="pointer-events-none absolute top-0 bottom-0 z-10 w-0.5 -translate-x-1/2 bg-red-600"
-            style={{ left: `${pct(cursorMs)}%` }}
-          />
-        </div>
-
-        {/* 時刻ラベル。 */}
-        <div className="relative mt-1 h-4 text-[10px] text-neutral-400">
-          {[0, 3, 6, 9, 12, 15, 18, 21, 24].map((h) => (
-            <span
-              key={h}
-              className="absolute -translate-x-1/2 tabular-nums"
-              style={{ left: `${(h / 24) * 100}%` }}
-            >
-              {h}
-            </span>
-          ))}
-        </div>
-
-        {/* 選択中の1時間を全幅で微調整。スマホでも指で分単位に狙える。 */}
-        <div className="mt-2 flex items-center gap-2 text-xs tabular-nums text-neutral-500">
-          <span className="w-11 shrink-0">{jstHMms(winStartMs)}</span>
-          <input
-            type="range"
-            min={winStartMs}
-            max={winStartMs + HOUR_MS}
-            step={30_000}
-            value={clamp(cursorMs, winStartMs, winStartMs + HOUR_MS)}
-            onChange={(e) => setCursorMs(Number(e.target.value))}
-            className="h-2 flex-1 accent-red-600"
-            aria-label="選択中の1時間の微調整"
-          />
-          <span className="w-11 shrink-0 text-right">{jstHMms(winStartMs + HOUR_MS)}</span>
-        </div>
-
-        <p className="mt-1 text-xs text-neutral-400">
-          上のバーをタップ/ドラッグで1時間窓を移動、下のスライダーで窓内の現在位置(赤線)を微調整。赤い縦線＝未取得の時間帯。
-        </p>
       </div>
     </div>
   );

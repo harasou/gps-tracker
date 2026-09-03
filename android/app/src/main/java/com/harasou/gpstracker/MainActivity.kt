@@ -1,9 +1,12 @@
 package com.harasou.gpstracker
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -160,6 +163,23 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
             onClick = { requestPermissions() },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("位置情報の権限をリクエスト") }
+
+        // Android 12+ では、Deep Sleep 中でも記録間隔どおりに起床するための
+        // exact アラーム権限が既定で許可されていないことがある。未許可だと
+        // 間隔がずれる非exact方式にフォールバックしてしまうため、設定画面へ誘導する。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            OutlinedButton(
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                            Uri.parse("package:${context.packageName}"),
+                        ),
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("正確なアラームの権限を許可(夜間の間引き防止)") }
+        }
 
         if (!running) {
             Button(

@@ -26,7 +26,6 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -38,6 +37,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * - タイマーで能動的に現在地を要求する(測位イベント待ちの受動型ではない)。
  * - 位置が取れたら座標付きで送信。取れなければ「位置不明」レコードを送る。
  * - 送信できない(圏外等)ときは Uploader がバッファし、次回成功時に再送する。
+ * - 次回の起床は coroutine の delay ではなく exact アラームで予約する。
+ *   delay (Handler ベース) は Deep Sleep 中に CPU が起きるまで発火しないため、
+ *   就寝中など画面 OFF が続く状況で送信間隔が大きく空く原因になっていた。
  */
 class LocationService : LifecycleService() {
 
@@ -45,8 +47,8 @@ class LocationService : LifecycleService() {
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var uploader: Uploader
 
-    // 記録ループは常に 1 つだけ。onStartCommand が複数回呼ばれても二重起動させない。
-    private var loopJob: Job? = null
+    // 1 回分の tick は常に 1 つだけ。onStartCommand が複数回呼ばれても二重起動させない。
+    private var tickJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -60,31 +62,61 @@ class LocationService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
 
         if (intent?.action == ACTION_STOP) {
+            cancelWakeAlarm()
             stopSelf()
             return START_NOT_STICKY
         }
 
         startForegroundCompat()
-        // 既存ループがあればキャンセルし、必ず 1 つだけ起動する。
+        // 前回分がまだ走っていればキャンセルし、必ず 1 つだけ実行する。
         // (再スタート時に最新の設定を読み直す意味も兼ねる)
-        loopJob?.cancel()
-        loopJob = lifecycleScope.launch { recordLoop() }
+        tickJob?.cancel()
+        tickJob = lifecycleScope.launch { tickAndScheduleNext() }
         return START_STICKY
     }
 
-    /** 間隔ごとに 1 件送るループ。delay はキャンセル時に例外で抜ける。 */
-    private suspend fun recordLoop() {
+    /** 1 件送信し、完了後に次回分の起床アラームを予約する。 */
+    private suspend fun tickAndScheduleNext() {
         val s = settingsRepo.current()
         val intervalMs = (s.intervalSec.coerceAtLeast(1)) * 1000L
         // 測位待ちの上限。間隔より短くして、間隔内に必ず何か送れるようにする。
         val fixTimeoutMs = minOf(intervalMs, 30_000L)
-        Log.i(TAG, "記録ループ開始 interval=${s.intervalSec}s fixTimeout=${fixTimeoutMs}ms")
+        Log.i(TAG, "tick 開始 interval=${s.intervalSec}s fixTimeout=${fixTimeoutMs}ms")
 
-        while (true) {
-            tick(s, fixTimeoutMs)
-            delay(intervalMs)
+        tick(s, fixTimeoutMs)
+        scheduleWakeAlarm(System.currentTimeMillis() + intervalMs)
+    }
+
+    /**
+     * Deep Sleep 中でも指定時刻に起きられる exact アラームを予約する。
+     * 同じ PendingIntent で予約し直すと OS 側で前回分は自動的に置き換わるため、
+     * 二重に発火する心配はない。
+     *
+     * SCHEDULE_EXACT_ALARM が許可されていない端末(Android 12+ で未許可のケース)では
+     * exact アラームを使えないため、非 exact だが Doze の起床は許される
+     * setAndAllowWhileIdle にフォールバックする。
+     */
+    private fun scheduleWakeAlarm(triggerAtMillis: Long) {
+        val am = getSystemService(AlarmManager::class.java)
+        val pi = wakePendingIntent()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+        } else {
+            Log.w(TAG, "SCHEDULE_EXACT_ALARM が未許可のため非exactアラームで代用")
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
         }
     }
+
+    private fun cancelWakeAlarm() {
+        getSystemService(AlarmManager::class.java).cancel(wakePendingIntent())
+    }
+
+    private fun wakePendingIntent(): PendingIntent = PendingIntent.getForegroundService(
+        this,
+        REQUEST_CODE_WAKE,
+        Intent(applicationContext, LocationService::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     /** 1 回分: 現在地を要求し、取れたら座標付き・取れなければ位置不明として送る。 */
     private suspend fun tick(s: AppSettings, fixTimeoutMs: Long) {
@@ -191,24 +223,17 @@ class LocationService : LifecycleService() {
 
     /**
      * 最近のアプリ一覧からスワイプで消されたときに呼ばれる。
-     * 記録を続けたいので、少し後に自身を再起動するようアラームを仕込む。
+     * 記録を続けたいので、少し後に自身を再起動するよう exact アラームを仕込む。
+     * (次回 tick 用に予約済みのアラームと同じ PendingIntent なので、これで置き換わる)
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val restart = Intent(applicationContext, LocationService::class.java)
-        val pi = PendingIntent.getForegroundService(
-            this,
-            1,
-            restart,
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val am = getSystemService(AlarmManager::class.java)
-        am.set(AlarmManager.RTC, System.currentTimeMillis() + 1_000, pi)
+        scheduleWakeAlarm(System.currentTimeMillis() + 1_000)
         Log.i(TAG, "タスク削除を検知。1秒後に再起動を予約")
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
-        Log.i(TAG, "記録ループ停止")
+        Log.i(TAG, "サービス停止")
         super.onDestroy()
     }
 
@@ -216,6 +241,7 @@ class LocationService : LifecycleService() {
         private const val TAG = "LocationService"
         private const val CHANNEL_ID = "location_tracking"
         private const val NOTIFICATION_ID = 1
+        private const val REQUEST_CODE_WAKE = 1
         const val ACTION_STOP = "com.harasou.gpstracker.STOP"
 
         // ベストオブN 測位のチューニング値(将来 Settings に出せるよう定数化)。

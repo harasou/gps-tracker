@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Deep Sleep 中でも記録間隔どおりに起床するための exact アラーム(API31+) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- 通知(API33+ は実行時許可が必要) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

@@ -50,27 +50,40 @@ export default function MapArea({
     typeof initialSlotIndex === "number" ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
   );
 
-  // 日付送り/カレンダーで URL の slot 指定が変わったら、24時間/30分枠モードを同期する。
-  // (ブラウザの戻る/進むで URL だけ変わるケースもここで拾う)
+  // 日付送り/カレンダーで URL の day・slot 指定が変わったら、その指定どおりに同期する。
+  // (矢印の日またぎは 0 や 47 を明示しているので、ここでその枠が正確に反映される。
+  //  ブラウザの戻る/進むで URL だけ変わるケースもここで拾う)
   const navInited = useRef(false);
   useEffect(() => {
     if (!navInited.current) {
       navInited.current = true;
       return;
     }
-    setFullDay(initialSlotIndex === "day");
+    if (initialSlotIndex === "day") {
+      setFullDay(true);
+    } else if (typeof initialSlotIndex === "number") {
+      setFullDay(false);
+      setSlotStartMs(dayStartMs + initialSlotIndex * SLOT_MS);
+    } else {
+      // slot 未指定(例:「最新」で今日へ遷移): 最新枠へ。
+      setFullDay(false);
+      setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day, initialSlotIndex]);
 
-  // 同日データの再取得(「最新」など)時、30分枠モードなら最新の枠へ追従する。
-  // 24時間モード中は全点表示のままでよいので追従不要。
+  // 同日のまま新しいデータが来た(「最新」など、日付は変わらない)場合だけ、
+  // 30分枠モードなら最新の枠へ追従する。日をまたぐ遷移は上の effect が担当する。
+  const prevDayRef = useRef(day);
   const dataInited = useRef(false);
   useEffect(() => {
+    const sameDay = prevDayRef.current === day;
+    prevDayRef.current = day;
     if (!dataInited.current) {
       dataInited.current = true;
       return;
     }
-    if (fullDay) return;
+    if (fullDay || !sameDay) return;
     setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, dayStartMs, lastMs]);

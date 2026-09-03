@@ -1,4 +1,7 @@
 import type { Query } from "firebase-admin/firestore";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { DEVICE_ID_COOKIE } from "@/lib/deviceIdCookie";
 import { db, LOCATIONS_COLLECTION } from "@/lib/firebaseAdmin";
 import type { LocationPoint } from "@/lib/types";
 import MapArea from "./MapArea";
@@ -195,7 +198,15 @@ export default async function MapPage({
 }: {
   searchParams: Promise<{ deviceId?: string; date?: string; slot?: string }>;
 }) {
-  const { deviceId, date, slot } = await searchParams;
+  const { deviceId: queryDeviceId, date, slot } = await searchParams;
+  const cookieStore = await cookies();
+  // URL 指定を優先し、無ければ cookie の端末IDを使う。どちらも無ければトップの入力画面へ。
+  // (全端末分をデフォルトで見せない — deviceId 必須にすることが実質的なアクセス制御)
+  const deviceId = queryDeviceId || cookieStore.get(DEVICE_ID_COOKIE)?.value || undefined;
+  if (!deviceId) {
+    redirect("/");
+  }
+
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
   const today = jstDay(0);
   // 日付未指定なら今日を表示する。

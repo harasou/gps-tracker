@@ -33,8 +33,8 @@ export default function MapArea({
   day: string;
   today: string;
   deviceId?: string;
-  // 矢印で日をまたいだ時の着地枠(0..47)。無ければ最新枠。
-  initialSlotIndex?: number;
+  // 矢印/カレンダーでの指定。"day" なら24時間表示、0..47 なら30分枠、無ければ最新枠。
+  initialSlotIndex?: number | "day";
   meta: MapMeta;
 }) {
   const router = useRouter();
@@ -43,19 +43,36 @@ export default function MapArea({
   const lastMs = points.length ? Date.parse(points[points.length - 1].recordedAt) : dayStartMs;
   const slotOf = (ms: number) => dayStartMs + Math.floor((ms - dayStartMs) / SLOT_MS) * SLOT_MS;
 
+  // 24時間表示か、30分枠表示か。
+  const [fullDay, setFullDay] = useState<boolean>(initialSlotIndex === "day");
   // 選択中の 30 分枠(開始 ms)。URL に slot 指定があればそれ、無ければ最新点の枠。
   const [slotStartMs, setSlotStartMs] = useState<number>(
-    initialSlotIndex != null ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
+    typeof initialSlotIndex === "number" ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
   );
 
-  // 初回マウントは上の初期値(URL の slot 指定)を尊重。以降(同日データ再取得など)は最新枠へ。
-  const inited = useRef(false);
+  // 日付送り/カレンダーで URL の slot 指定が変わったら、24時間/30分枠モードを同期する。
+  // (ブラウザの戻る/進むで URL だけ変わるケースもここで拾う)
+  const navInited = useRef(false);
   useEffect(() => {
-    if (!inited.current) {
-      inited.current = true;
+    if (!navInited.current) {
+      navInited.current = true;
       return;
     }
+    setFullDay(initialSlotIndex === "day");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day, initialSlotIndex]);
+
+  // 同日データの再取得(「最新」など)時、30分枠モードなら最新の枠へ追従する。
+  // 24時間モード中は全点表示のままでよいので追従不要。
+  const dataInited = useRef(false);
+  useEffect(() => {
+    if (!dataInited.current) {
+      dataInited.current = true;
+      return;
+    }
+    if (fullDay) return;
     setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, dayStartMs, lastMs]);
 
   // 枠ごとの点数(ドロップダウンに出す)。
@@ -71,32 +88,42 @@ export default function MapArea({
   const btn =
     "rounded border border-neutral-300 px-3 py-3 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
   const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
-  // 今日の最終枠より先(未来)へは進めない。
-  const nextBlocked = atLast && day >= today;
+  // 今日より先(未来)へは進めない。30分枠モードは最終枠かどうかも見る。
+  const nextBlocked = fullDay ? day >= today : atLast && day >= today;
 
-  // 別の日付の指定枠へ遷移する(矢印の日またぎ)。
-  function navTo(d: string, slotIdx: number) {
+  // 別の日付の指定枠(30分枠 or "day")へ遷移する(矢印の日またぎ・カレンダー選択)。
+  function navTo(d: string, slot: number | "day") {
     const p = new URLSearchParams();
     p.set("date", d);
-    p.set("slot", String(slotIdx));
+    p.set("slot", String(slot));
     if (deviceId) p.set("deviceId", deviceId);
     router.push(`/map?${p.toString()}`);
   }
 
-  // ◀: 枠内は −30分。先頭(00:00)なら前日の 23:30 へ。
+  // ◀: 24時間モードなら前日へ。30分枠モードは枠内 −30分、先頭(00:00)なら前日の 23:30 へ。
   function goPrev() {
+    if (fullDay) {
+      navTo(shiftDay(day, -1), "day");
+      return;
+    }
     if (slotStartMs > dayStartMs) setSlotStartMs(slotStartMs - SLOT_MS);
     else navTo(shiftDay(day, -1), 47);
   }
 
-  // ▶: 枠内は +30分。末尾(23:30)なら翌日の 00:00 へ(未来日は不可)。
+  // ▶: 24時間モードなら翌日へ(未来日は不可)。30分枠モードは枠内 +30分、末尾なら翌日の 00:00 へ。
   function goNext() {
+    if (fullDay) {
+      if (day < today) navTo(shiftDay(day, 1), "day");
+      return;
+    }
     if (!atLast) setSlotStartMs(slotStartMs + SLOT_MS);
     else if (!nextBlocked) navTo(shiftDay(day, 1), 0);
   }
 
   // 「更新」= 今へ。今日でなければ今日へ遷移、今日なら再取得して最新枠へ。
+  // いずれも30分枠モードに戻す(「最新」は特定の瞬間を見る操作のため)。
   function onUpdate() {
+    setFullDay(false);
     if (day === today) {
       router.refresh();
       setSlotStartMs(slotOf(lastMs));
@@ -120,22 +147,41 @@ export default function MapArea({
             この日の位置情報がありません。日付を変えて直近を表示してください。
           </div>
         ) : (
-          <MapView apiKey={apiKey} points={points} meta={meta} slotStartMs={slotStartMs} />
+          <MapView
+            apiKey={apiKey}
+            points={points}
+            meta={meta}
+            slotStartMs={slotStartMs}
+            fullDay={fullDay}
+          />
         )}
       </div>
 
       {/* 下部ナビ: 左に ◀ 日付 時間 ▶ / 右に 更新。date はネイティブカレンダー。 */}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
-        <button onClick={goPrev} className={`${btn} shrink-0`} aria-label="30分前(前日へ繰越)">
+        <button
+          onClick={goPrev}
+          className={`${btn} shrink-0`}
+          aria-label={fullDay ? "前日へ" : "30分前(前日へ繰越)"}
+        >
           ◀
         </button>
         <DateInput current={day} deviceId={deviceId} />
         <select
-          value={slotStartMs}
-          onChange={(e) => setSlotStartMs(Number(e.target.value))}
+          value={fullDay ? "day" : slotStartMs}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "day") {
+              setFullDay(true);
+            } else {
+              setFullDay(false);
+              setSlotStartMs(Number(v));
+            }
+          }}
           className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-3 text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
-          aria-label="時間帯(30分)を選択"
+          aria-label="時間帯を選択"
         >
+          <option value="day">24時間{points.length > 0 ? ` (${points.length})` : ""}</option>
           {Array.from({ length: 48 }, (_, i) => {
             const ms = dayStartMs + i * SLOT_MS;
             const n = slotCounts.get(i) ?? 0;
@@ -150,7 +196,7 @@ export default function MapArea({
           onClick={goNext}
           className={`${btn} shrink-0`}
           disabled={nextBlocked}
-          aria-label="30分後(翌日へ繰越)"
+          aria-label={fullDay ? "翌日へ" : "30分後(翌日へ繰越)"}
         >
           ▶
         </button>

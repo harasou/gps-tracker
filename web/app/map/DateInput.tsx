@@ -36,6 +36,8 @@ export default function DateInput({
           if (!v) return;
           const p = new URLSearchParams();
           p.set("date", v);
+          // カレンダーで選んだ日はまず24時間分を表示する。
+          p.set("slot", "day");
           if (deviceId) p.set("deviceId", deviceId);
           router.push(`/map?${p.toString()}`);
         }}

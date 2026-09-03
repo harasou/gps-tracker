@@ -99,12 +99,15 @@ export default function MapView({
   points,
   meta,
   slotStartMs,
+  fullDay,
 }: {
   apiKey: string;
   points: LocationPoint[];
   meta: MapMeta;
   // 表示する 30 分枠の開始時刻(epoch ms)。選択は親(MapArea)が持つ。
   slotStartMs: number;
+  // true なら 30 分枠を無視してその日の全点を表示する。
+  fullDay: boolean;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapObjRef = useRef<google.maps.Map | null>(null);
@@ -127,14 +130,16 @@ export default function MapView({
 
   const gaps = useMemo(() => detectGaps(points), [points]);
 
-  // 選択中の 30 分枠に入る点だけ。
+  // 24時間表示なら全点、そうでなければ選択中の 30 分枠に入る点だけ。
   const windowPoints = useMemo(
     () =>
-      points.filter((p) => {
-        const t = Date.parse(p.recordedAt);
-        return t >= slotStartMs && t < slotStartMs + SLOT_MS;
-      }),
-    [points, slotStartMs],
+      fullDay
+        ? points
+        : points.filter((p) => {
+            const t = Date.parse(p.recordedAt);
+            return t >= slotStartMs && t < slotStartMs + SLOT_MS;
+          }),
+    [points, slotStartMs, fullDay],
   );
 
   // 枠が変わったらステッパを先頭へ戻す。
@@ -359,7 +364,9 @@ export default function MapView({
           <div className="text-xs text-neutral-500 tabular-nums">
             {detailsOpen
               ? "▼ 詳細を閉じる"
-              : `▲ この30分 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
+              : fullDay
+                ? `▲ 24時間 ${windowPoints.length}点 · 除外${meta.excludedTotal}`
+                : `▲ この30分 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
           </div>
         </div>
 

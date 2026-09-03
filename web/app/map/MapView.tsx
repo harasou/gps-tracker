@@ -77,9 +77,9 @@ function detectGaps(points: LocationPoint[]): Gap[] {
 
 function popupHtml(p: LocationPoint, index: number, total: number): string {
   const acc = p.accuracy !== undefined ? `<br>精度 約${Math.round(p.accuracy)}m` : "";
-  return `<div style="font-size:12px;line-height:1.5">🕐 <b>${jstTime(
+  return `<div style="font-size:16px;line-height:1.5">🕐 <b>${jstTime(
     p.recordedAt,
-  )}</b>（JST）<br>${index + 1} / ${total} 点目${acc}</div>`;
+  )}</b><br>${index + 1} / ${total} 点目${acc}</div>`;
 }
 
 // 下部の詳細パネルに出すサーバ集計値。
@@ -227,7 +227,7 @@ export default function MapView({
           strokeColor: "#ffffff",
           strokeWeight: 1,
         },
-        title: `${jstTime(p.recordedAt)}（JST）`,
+        title: jstTime(p.recordedAt),
       });
       marker.addListener("click", () => {
         if (!info) return;
@@ -281,9 +281,9 @@ export default function MapView({
       stepInfoRef.current = new g.maps.InfoWindow({ disableAutoPan: true });
     }
     stepInfoRef.current.setContent(
-      `<div style="font-size:12px;line-height:1.4">🕐 <b>${jstTime(
+      `<div style="font-size:18px;line-height:1.4">🕐 <b>${jstTime(
         p.recordedAt,
-      )}</b>（JST）<br>${stepIdx + 1} / ${windowPoints.length} 点目</div>`,
+      )}</b><br>${stepIdx + 1} / ${windowPoints.length} 点目</div>`,
     );
     stepInfoRef.current.open({ map, anchor: currentMarkerRef.current });
 

@@ -18,7 +18,7 @@ export default function DateInput({
   const label = `${Number(m)}/${Number(d)}`;
 
   return (
-    <label className="relative inline-flex shrink-0 cursor-pointer items-center rounded border border-neutral-300 px-3 py-3 text-base tabular-nums hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
+    <label className="relative inline-flex shrink-0 cursor-pointer items-center rounded border border-neutral-300 px-3 py-3 text-lg tabular-nums hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
       📅 {label}
       <input
         ref={ref}

@@ -1,6 +1,5 @@
 "use client";
 
-import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
 
@@ -118,9 +117,8 @@ export default function MapView({
     overlays: (google.maps.Polyline | google.maps.Marker)[];
     info: google.maps.InfoWindow | null;
   }>({ overlays: [], info: null });
-  // 下部の詳細パネル。既定は閉じ、ハンドルの上スワイプ/タップで開く。
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const swipeRef = useRef(0);
+  // 下部の操作パネル。既定は1行サマリーだけ、タップで展開する。
+  const [expanded, setExpanded] = useState(false);
   // 枠内プロットを1点ずつ辿るステッパ。現在位置と、その点を示す赤マーカー/吹き出し。
   const [pointIdx, setPointIdx] = useState(0);
   const currentMarkerRef = useRef<google.maps.Marker | null>(null);
@@ -299,17 +297,6 @@ export default function MapView({
     }
   }, [mapReady, windowPoints, stepIdx]);
 
-  // 詳細パネルのハンドル。上スワイプで開く/下スワイプで閉じる/小さい動き(タップ)はトグル。
-  function onHandleDown(e: React.PointerEvent<HTMLDivElement>) {
-    swipeRef.current = e.clientY;
-  }
-  function onHandleUp(e: React.PointerEvent<HTMLDivElement>) {
-    const dy = e.clientY - swipeRef.current;
-    if (dy < -15) setDetailsOpen(true);
-    else if (dy > 15) setDetailsOpen(false);
-    else setDetailsOpen((o) => !o);
-  }
-
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
   }
@@ -318,8 +305,8 @@ export default function MapView({
     <div className="flex flex-1 flex-col">
       <div ref={mapRef} className="flex-1" />
       <div className="border-t border-neutral-200 px-4 pb-2 pt-2 dark:border-neutral-800">
-        {/* 枠内プロットを1点ずつ辿るステッパ。現在点は地図に赤マーカー+時刻。 */}
-        {windowPoints.length > 0 ? (
+        {/* 枠内プロットを1点ずつ辿るステッパ。現在点は地図に赤マーカー+時刻。展開時のみ表示。 */}
+        {expanded && windowPoints.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 text-sm">
             <button
               onClick={() => setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1))}
@@ -351,43 +338,43 @@ export default function MapView({
           </div>
         ) : null}
 
-        {/* 上スワイプ/タップで開く詳細ハンドル。 */}
-        <div
-          onPointerDown={onHandleDown}
-          onPointerUp={onHandleUp}
-          className="flex touch-none cursor-pointer select-none flex-col items-center gap-1"
-          role="button"
-          aria-expanded={detailsOpen}
+        {/* タップで下の詳細パネルを開閉するハンドル。 */}
+        <button
+          onClick={() => setExpanded((o) => !o)}
+          className="flex w-full flex-col items-center gap-1 py-1"
+          aria-expanded={expanded}
           aria-label="詳細の開閉"
         >
-          <div className="h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
-          <div className="text-xs text-neutral-500 tabular-nums">
-            {detailsOpen
+          <span className="h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-600" />
+          <span className="text-xs text-neutral-500 tabular-nums">
+            {expanded
               ? "▼ 詳細を閉じる"
               : fullDay
                 ? `▲ 24時間 ${windowPoints.length}点 · 除外${meta.excludedTotal}`
                 : `▲ この30分 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
-          </div>
-        </div>
+          </span>
+        </button>
 
-        {/* 詳細パネル(日次: 点数・除外内訳・位置不明・日付・device)。 */}
-        {detailsOpen ? (
-          <div className="mt-1 space-y-0.5 rounded bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
-            <div className="tabular-nums">
-              {points.length} 点
-              {meta.noFixCount > 0 ? ` / 位置不明 ${meta.noFixCount} 件` : ""}
-            </div>
-            {meta.excludedTotal > 0 ? (
+        {expanded ? (
+          <div className="mt-2 space-y-3">
+            {/* 詳細(日次: 点数・除外内訳・位置不明・日付・device)。 */}
+            <div className="space-y-0.5 rounded bg-neutral-50 px-3 py-2 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
               <div className="tabular-nums">
-                除外 {meta.excludedTotal} 点 ({meta.excludedPct}%: 精度
-                {meta.excludedByAccuracy} / 速度{meta.excludedBySpeed} / スパイク
-                {meta.excludedBySpike})
+                {points.length} 点
+                {meta.noFixCount > 0 ? ` / 位置不明 ${meta.noFixCount} 件` : ""}
               </div>
-            ) : null}
-            <div className="tabular-nums">未取得の時間帯: {gaps.length} 件</div>
-            <div>
-              {meta.rangeLabel}
-              {meta.deviceId ? ` / device: ${meta.deviceId}` : ""}
+              {meta.excludedTotal > 0 ? (
+                <div className="tabular-nums">
+                  除外 {meta.excludedTotal} 点 ({meta.excludedPct}%: 精度
+                  {meta.excludedByAccuracy} / 速度{meta.excludedBySpeed} / スパイク
+                  {meta.excludedBySpike})
+                </div>
+              ) : null}
+              <div className="tabular-nums">未取得の時間帯: {gaps.length} 件</div>
+              <div>
+                {meta.rangeLabel}
+                {meta.deviceId ? ` / device: ${meta.deviceId}` : ""}
+              </div>
             </div>
           </div>
         ) : null}

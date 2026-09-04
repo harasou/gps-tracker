@@ -99,7 +99,7 @@ export default function MapArea({
   }, [points, dayStartMs]);
 
   const btn =
-    "rounded border border-neutral-300 px-3 py-3 text-base hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
+    "rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-neutral-700 dark:hover:bg-neutral-800";
   const atLast = slotStartMs >= dayStartMs + DAY_MS - SLOT_MS;
   // 今日より先(未来)へは進めない。30分枠モードは最終枠かどうかも見る。
   const nextBlocked = fullDay ? day >= today : atLast && day >= today;
@@ -155,22 +155,12 @@ export default function MapArea({
           <div className="p-6 text-red-600">
             GOOGLE_MAPS_API_KEY が設定されていません。README のセットアップ手順を参照してください。
           </div>
-        ) : points.length === 0 ? (
-          <div className="p-6 text-neutral-500">
-            この日の位置情報がありません。日付を変えて直近を表示してください。
-          </div>
         ) : (
-          <MapView
-            apiKey={apiKey}
-            points={points}
-            meta={meta}
-            slotStartMs={slotStartMs}
-            fullDay={fullDay}
-          />
+          <MapView apiKey={apiKey} points={points} meta={meta} slotStartMs={slotStartMs} fullDay={fullDay} />
         )}
       </div>
 
-      {/* 下部ナビ: 左に ◀ 日付 時間 ▶ / 右に 更新。date はネイティブカレンダー。 */}
+      {/* 常時表示の日付/時間帯ナビ: ◀ 日付 時間帯 ▶ 最新。date はネイティブカレンダー。 */}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
         <button
           onClick={goPrev}
@@ -191,7 +181,7 @@ export default function MapArea({
               setSlotStartMs(Number(v));
             }
           }}
-          className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-3 text-base tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
+          className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-3 text-lg tabular-nums dark:border-neutral-700 dark:bg-neutral-900"
           aria-label="時間帯を選択"
         >
           <option value="day">24時間{points.length > 0 ? ` (${points.length})` : ""}</option>

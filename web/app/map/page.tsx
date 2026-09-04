@@ -1,6 +1,5 @@
 import type { Query } from "firebase-admin/firestore";
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import { DEVICE_ID_COOKIE } from "@/lib/deviceIdCookie";
 import { db, LOCATIONS_COLLECTION } from "@/lib/firebaseAdmin";
 import type { LocationPoint } from "@/lib/types";
@@ -143,9 +142,19 @@ async function fetchPoints(
   excludedBySpeed: number;
   excludedBySpike: number;
 }> {
-  let query: Query = db.collection(LOCATIONS_COLLECTION);
+  // deviceId 未指定で全端末分を返すと事実上の情報漏洩になるため、必ず空で返す。
+  if (!deviceId) {
+    return {
+      points: [],
+      noFixCount: 0,
+      rawLocated: 0,
+      excludedByAccuracy: 0,
+      excludedBySpeed: 0,
+      excludedBySpike: 0,
+    };
+  }
 
-  if (deviceId) query = query.where("deviceId", "==", deviceId);
+  let query: Query = db.collection(LOCATIONS_COLLECTION).where("deviceId", "==", deviceId);
 
   if (day && DAY_RE.test(day)) {
     const fromIso = new Date(Date.parse(`${day}T00:00:00.000+09:00`)).toISOString();
@@ -200,12 +209,10 @@ export default async function MapPage({
 }) {
   const { deviceId: queryDeviceId, date, slot } = await searchParams;
   const cookieStore = await cookies();
-  // URL 指定を優先し、無ければ cookie の端末IDを使う。どちらも無ければトップの入力画面へ。
-  // (全端末分をデフォルトで見せない — deviceId 必須にすることが実質的なアクセス制御)
+  // URL 指定を優先し、無ければ cookie の端末IDを使う。どちらも無ければ deviceId
+  // なしとして扱う(fetchPoints が空を返すので、ただの空の地図が表示されるだけ)。
+  // deviceId 入力を要求する画面は出さない — 認証機構の存在自体を見せないため。
   const deviceId = queryDeviceId || cookieStore.get(DEVICE_ID_COOKIE)?.value || undefined;
-  if (!deviceId) {
-    redirect("/");
-  }
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
   const today = jstDay(0);

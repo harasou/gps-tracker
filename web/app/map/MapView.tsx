@@ -93,12 +93,22 @@ export interface MapMeta {
   deviceId?: string;
 }
 
+// フォーム部品にフォーカス中は、その部品のネイティブなキー操作(日付欄内の移動、
+// select/range のキー操作など)を優先し、グローバルの矢印キー処理はスキップする。
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable;
+}
+
 export default function MapView({
   apiKey,
   points,
   meta,
   slotStartMs,
   fullDay,
+  onPrevRange,
+  onNextRange,
 }: {
   apiKey: string;
   points: LocationPoint[];
@@ -107,6 +117,9 @@ export default function MapView({
   slotStartMs: number;
   // true なら 30 分枠を無視してその日の全点を表示する。
   fullDay: boolean;
+  // ◀/▶ による表示範囲(日付/30分枠)の変更。矢印キー操作から呼ぶ。
+  onPrevRange?: () => void;
+  onNextRange?: () => void;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapObjRef = useRef<google.maps.Map | null>(null);
@@ -297,6 +310,36 @@ export default function MapView({
     }
   }, [mapReady, windowPoints, stepIdx]);
 
+  // ←/→ キーでのグローバル操作は表示範囲(日付/30分枠)の前後移動、↑/↓ キーはステッパ
+  // (枠内を1点ずつ辿る)の移動。ステッパは詳細パネルの展開有無にかかわらず操作できる。
+  // 入力欄などフォーカス中は無視。
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (isEditableTarget(e.target)) return;
+
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && windowPoints.length > 0) {
+        e.preventDefault();
+        if (e.key === "ArrowUp") {
+          setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1));
+        } else {
+          setPointIdx((i) => Math.min(windowPoints.length - 1, Math.min(i, windowPoints.length - 1) + 1));
+        }
+        return;
+      }
+
+      if (e.key === "ArrowLeft" && onPrevRange) {
+        e.preventDefault();
+        onPrevRange();
+      } else if (e.key === "ArrowRight" && onNextRange) {
+        e.preventDefault();
+        onNextRange();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [windowPoints, onPrevRange, onNextRange]);
+
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
   }
@@ -313,6 +356,7 @@ export default function MapView({
               className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx <= 0}
               aria-label="前のプロット"
+              aria-keyshortcuts="ArrowUp"
             >
               ◀
             </button>
@@ -332,6 +376,7 @@ export default function MapView({
               className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx >= windowPoints.length - 1}
               aria-label="次のプロット"
+              aria-keyshortcuts="ArrowDown"
             >
               ▶
             </button>

@@ -156,7 +156,15 @@ export default function MapArea({
             GOOGLE_MAPS_API_KEY が設定されていません。README のセットアップ手順を参照してください。
           </div>
         ) : (
-          <MapView apiKey={apiKey} points={points} meta={meta} slotStartMs={slotStartMs} fullDay={fullDay} />
+          <MapView
+            apiKey={apiKey}
+            points={points}
+            meta={meta}
+            slotStartMs={slotStartMs}
+            fullDay={fullDay}
+            onPrevRange={goPrev}
+            onNextRange={nextBlocked ? undefined : goNext}
+          />
         )}
       </div>
 
@@ -166,6 +174,7 @@ export default function MapArea({
           onClick={goPrev}
           className={`${btn} shrink-0`}
           aria-label={fullDay ? "前日へ" : "30分前(前日へ繰越)"}
+          aria-keyshortcuts="ArrowLeft"
         >
           ◀
         </button>
@@ -200,6 +209,7 @@ export default function MapArea({
           className={`${btn} shrink-0`}
           disabled={nextBlocked}
           aria-label={fullDay ? "翌日へ" : "30分後(翌日へ繰越)"}
+          aria-keyshortcuts="ArrowRight"
         >
           ▶
         </button>

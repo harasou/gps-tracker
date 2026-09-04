@@ -7,6 +7,9 @@ import type { LocationPoint } from "@/lib/types";
 export const SLOT_MS = 30 * 60 * 1000;
 export const DAY_MS = 86_400_000;
 
+// 点群フィット時にこれ以上は寄らない(密集地点で寄りすぎるのを防ぐ)。
+const MAX_FIT_ZOOM = 18;
+
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
 let mapsPromise: Promise<void> | null = null;
 
@@ -240,10 +243,14 @@ export default function MapView({
       plotRef.current.overlays.push(marker);
     });
 
-    // 枠の点が収まるようにフィット(最大ズーム制限なし)。
+    // 枠の点が収まるようにフィット(寄りすぎ防止に最大ズームを制限)。
     const bounds = new g.maps.LatLngBounds();
     windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
     map.fitBounds(bounds);
+    g.maps.event.addListenerOnce(map, "idle", () => {
+      const z = map.getZoom();
+      if (z !== undefined && z > MAX_FIT_ZOOM) map.setZoom(MAX_FIT_ZOOM);
+    });
   }, [mapReady, windowPoints]);
 
   // ステッパの現在点を赤マーカーで強調し、時刻を吹き出しで地図に表示する。

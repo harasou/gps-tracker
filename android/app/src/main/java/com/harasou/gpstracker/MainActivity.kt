@@ -1,6 +1,8 @@
 package com.harasou.gpstracker
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -108,6 +110,23 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
             Manifest.permission.ACCESS_FINE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
 
+    // 地図ページの URL(サーバ URL と同じオリジンの /map に deviceId を付けたもの)。
+    // 確認・共有用に表示する。deviceId 自体が実質的な合言葉なので、コピペで人に渡せる。
+    val mapUrl = remember(serverUrl, deviceId) {
+        if (serverUrl.isBlank() || deviceId.isBlank()) {
+            ""
+        } else {
+            val uri = Uri.parse(serverUrl)
+            val scheme = uri.scheme
+            val authority = uri.authority
+            if (scheme.isNullOrBlank() || authority.isNullOrBlank()) {
+                ""
+            } else {
+                "$scheme://$authority/map?deviceId=$deviceId"
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -142,6 +161,25 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
 
         if (deviceId.isNotBlank()) {
             Text("端末ID: $deviceId", style = MaterialTheme.typography.bodySmall)
+        }
+
+        if (mapUrl.isNotBlank()) {
+            OutlinedTextField(
+                value = mapUrl,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("地図リンク(確認・共有用)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(
+                onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("GPS Tracker 地図リンク", mapUrl))
+                    status = "地図リンクをコピーしました。"
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("地図リンクをコピー") }
         }
 
         OutlinedButton(

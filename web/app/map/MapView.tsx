@@ -353,7 +353,7 @@ export default function MapView({
           <div className="mb-2 flex items-center gap-2 text-sm">
             <button
               onClick={() => setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1))}
-              className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx <= 0}
               aria-label="前のプロット"
               aria-keyshortcuts="ArrowUp"
@@ -373,7 +373,7 @@ export default function MapView({
               onClick={() =>
                 setPointIdx((i) => Math.min(windowPoints.length - 1, Math.min(i, windowPoints.length - 1) + 1))
               }
-              className="rounded border border-neutral-300 px-3 py-2 text-base hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx >= windowPoints.length - 1}
               aria-label="次のプロット"
               aria-keyshortcuts="ArrowDown"

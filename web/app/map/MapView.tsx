@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPoint } from "@/lib/types";
 
-// 選択できる時間枠(30分)。
-export const SLOT_MS = 30 * 60 * 1000;
+// 選択できる時間枠(1時間)。
+export const SLOT_MS = 60 * 60 * 1000;
 export const DAY_MS = 86_400_000;
 
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
@@ -113,11 +113,11 @@ export default function MapView({
   apiKey: string;
   points: LocationPoint[];
   meta: MapMeta;
-  // 表示する 30 分枠の開始時刻(epoch ms)。選択は親(MapArea)が持つ。
+  // 表示する 1 時間枠の開始時刻(epoch ms)。選択は親(MapArea)が持つ。
   slotStartMs: number;
-  // true なら 30 分枠を無視してその日の全点を表示する。
+  // true なら 1 時間枠を無視してその日の全点を表示する。
   fullDay: boolean;
-  // ◀/▶ による表示範囲(日付/30分枠)の変更。矢印キー操作から呼ぶ。
+  // ◀/▶ による表示範囲(日付/1時間枠)の変更。矢印キー操作から呼ぶ。
   onPrevRange?: () => void;
   onNextRange?: () => void;
 }) {
@@ -141,7 +141,7 @@ export default function MapView({
 
   const gaps = useMemo(() => detectGaps(points), [points]);
 
-  // 24時間表示なら全点、そうでなければ選択中の 30 分枠に入る点だけ。
+  // 24時間表示なら全点、そうでなければ選択中の 1 時間枠に入る点だけ。
   const windowPoints = useMemo(
     () =>
       fullDay
@@ -189,7 +189,7 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // 選択中の 30 分枠の点だけを描画し、その範囲にフィットする。
+  // 選択中の 1 時間枠の点だけを描画し、その範囲にフィットする。
   useEffect(() => {
     if (!mapReady) return;
     const map = mapObjRef.current;
@@ -310,7 +310,7 @@ export default function MapView({
     }
   }, [mapReady, windowPoints, stepIdx]);
 
-  // ←/→ キーでのグローバル操作は表示範囲(日付/30分枠)の前後移動、↑/↓ キーはステッパ
+  // ←/→ キーでのグローバル操作は表示範囲(日付/1時間枠)の前後移動、↑/↓ キーはステッパ
   // (枠内を1点ずつ辿る)の移動。ステッパは詳細パネルの展開有無にかかわらず操作できる。
   // 入力欄などフォーカス中は無視。
   useEffect(() => {
@@ -396,7 +396,7 @@ export default function MapView({
               ? "▼ 詳細を閉じる"
               : fullDay
                 ? `▲ 24時間 ${windowPoints.length}点 · 除外${meta.excludedTotal}`
-                : `▲ この30分 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
+                : `▲ この1時間 ${windowPoints.length}点 · 全${points.length}点 · 除外${meta.excludedTotal}`}
           </span>
         </button>
 

@@ -218,13 +218,13 @@ export default async function MapPage({
   const today = jstDay(0);
   // 日付未指定なら今日を表示する。
   const day = date && DAY_RE.test(date) ? date : today;
-  // 矢印/カレンダーで指定された枠。"day" なら24時間表示、0..47 なら30分枠、
+  // 矢印/カレンダーで指定された枠。"day" なら24時間表示、0..23 なら1時間枠、
   // 無ければ最新枠。
   const initialSlotIndex: number | "day" | undefined =
     slot === "day"
       ? "day"
       : slot !== undefined && /^\d{1,2}$/.test(slot)
-        ? Math.min(47, Math.max(0, parseInt(slot, 10)))
+        ? Math.min(23, Math.max(0, parseInt(slot, 10)))
         : undefined;
   const {
     points,

@@ -169,7 +169,7 @@ export default function MapArea({
       </div>
 
       {/* 常時表示の日付/時間帯ナビ: ◀ 日付 時間帯 ▶ 最新。date はネイティブカレンダー。 */}
-      <div className="flex items-center gap-2 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
+      <div className="flex items-center gap-3 border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
         <button
           onClick={goPrev}
           className={`${btn} shrink-0`}

@@ -10,6 +10,22 @@ export const DAY_MS = 86_400_000;
 // 24時間表示で生成する丸マーカーの上限。超える分は間引く(折れ線は全点描く)。
 const MAX_FULLDAY_MARKERS = 300;
 
+// ステッパの自動再生: 点数によらず「20点を0.5秒間隔」で合計およそ10秒に揃える。
+const PLAY_STEPS = 20;
+const PLAY_INTERVAL_MS = 500;
+
+// windowPoints から再生用に最大 PLAY_STEPS 個を均等に間引いたインデックス列を返す。
+// 点数が PLAY_STEPS 以下ならそのまま全点を使う。
+function samplePlayIndices(total: number, steps: number): number[] {
+  if (total <= 0) return [];
+  if (total <= steps) return Array.from({ length: total }, (_, i) => i);
+  const idx: number[] = [];
+  for (let i = 0; i < steps; i++) {
+    idx.push(Math.round((i * (total - 1)) / (steps - 1)));
+  }
+  return idx;
+}
+
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
 let mapsPromise: Promise<void> | null = null;
 
@@ -137,6 +153,9 @@ export default function MapView({
   const [expanded, setExpanded] = useState(false);
   // 枠内プロットを1点ずつ辿るステッパ。現在位置と、その点を示す赤マーカー/吹き出し。
   const [pointIdx, setPointIdx] = useState(0);
+  // 自動再生中かどうかと、そのタイマー(停止・枠切替・アンマウント時に破棄する)。
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentMarkerRef = useRef<google.maps.Marker | null>(null);
   const stepInfoRef = useRef<google.maps.InfoWindow | null>(null);
   // 直前に描画した枠。枠切替(=全体フィット)とステップ移動を区別するのに使う。
@@ -156,11 +175,53 @@ export default function MapView({
     [points, slotStartMs, fullDay],
   );
 
-  // 枠が変わったらステッパを先頭へ戻す。
+  // 枠が変わったらステッパを先頭へ戻し、再生中なら止める。
   useEffect(() => {
+    if (playTimerRef.current) {
+      clearInterval(playTimerRef.current);
+      playTimerRef.current = null;
+      setIsPlaying(false);
+    }
     setPointIdx(0);
   }, [windowPoints]);
   const stepIdx = windowPoints.length ? Math.min(pointIdx, windowPoints.length - 1) : 0;
+
+  // アンマウント時に再生タイマーを破棄する。
+  useEffect(() => {
+    return () => {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+    };
+  }, []);
+
+  // 自動再生の停止。手動でステッパを操作したときにも呼ぶ。
+  function stopPlay() {
+    if (playTimerRef.current) {
+      clearInterval(playTimerRef.current);
+      playTimerRef.current = null;
+    }
+    setIsPlaying(false);
+  }
+
+  // 自動再生の開始/停止トグル。点数によらず約20点を0.5秒間隔で辿る(合計10秒程度)。
+  function togglePlay() {
+    if (isPlaying) {
+      stopPlay();
+      return;
+    }
+    if (windowPoints.length === 0) return;
+    const seq = samplePlayIndices(windowPoints.length, PLAY_STEPS);
+    let i = 0;
+    setPointIdx(seq[0]);
+    setIsPlaying(true);
+    playTimerRef.current = setInterval(() => {
+      i += 1;
+      if (i >= seq.length) {
+        stopPlay();
+        return;
+      }
+      setPointIdx(seq[i]);
+    }, PLAY_INTERVAL_MS);
+  }
 
   // 地図は一度だけ生成する(枠切替では作り直さない)。
   useEffect(() => {
@@ -331,6 +392,7 @@ export default function MapView({
 
       if ((e.key === "ArrowUp" || e.key === "ArrowDown") && windowPoints.length > 0) {
         e.preventDefault();
+        stopPlay();
         if (e.key === "ArrowUp") {
           setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1));
         } else {
@@ -349,6 +411,8 @@ export default function MapView({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+    // stopPlay は ref/setState だけを触るので参照が変わっても再登録は不要。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowPoints, onPrevRange, onNextRange]);
 
   if (error) {
@@ -363,7 +427,18 @@ export default function MapView({
         {expanded && windowPoints.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 text-sm">
             <button
-              onClick={() => setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1))}
+              onClick={togglePlay}
+              className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              aria-label={isPlaying ? "自動再生を停止" : "自動再生(約10秒でひと巡り)"}
+              aria-pressed={isPlaying}
+            >
+              {isPlaying ? "■" : "▶"}
+            </button>
+            <button
+              onClick={() => {
+                stopPlay();
+                setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1));
+              }}
               className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx <= 0}
               aria-label="前のプロット"
@@ -376,14 +451,18 @@ export default function MapView({
               min={0}
               max={Math.max(0, windowPoints.length - 1)}
               value={stepIdx}
-              onChange={(e) => setPointIdx(Number(e.target.value))}
+              onChange={(e) => {
+                stopPlay();
+                setPointIdx(Number(e.target.value));
+              }}
               className="h-2 flex-1 accent-red-600"
               aria-label="プロットを辿る"
             />
             <button
-              onClick={() =>
-                setPointIdx((i) => Math.min(windowPoints.length - 1, Math.min(i, windowPoints.length - 1) + 1))
-              }
+              onClick={() => {
+                stopPlay();
+                setPointIdx((i) => Math.min(windowPoints.length - 1, Math.min(i, windowPoints.length - 1) + 1));
+              }}
               className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
               disabled={stepIdx >= windowPoints.length - 1}
               aria-label="次のプロット"

@@ -459,14 +459,6 @@ export default function MapView({
         {expanded && windowPoints.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 text-sm">
             <button
-              onClick={togglePlay}
-              className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-              aria-label={isPlaying ? "自動再生を停止" : "現在位置から自動再生"}
-              aria-pressed={isPlaying}
-            >
-              {isPlaying ? "■" : "▶"}
-            </button>
-            <button
               onClick={() => {
                 stopPlay();
                 setPointIdx((i) => Math.max(0, Math.min(i, windowPoints.length - 1) - 1));
@@ -501,6 +493,18 @@ export default function MapView({
               aria-keyshortcuts="ArrowDown"
             >
               ▶
+            </button>
+            {/* 下の日時ナビの「最新」ボタンと右端が揃うよう、行内でいちばん右に置く。 */}
+            <button
+              onClick={togglePlay}
+              className="shrink-0 rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              disabled={!isPlaying && stepIdx >= windowPoints.length - 1}
+              aria-label={
+                isPlaying ? "自動再生を停止" : stepIdx > 0 ? "自動再生を再開" : "自動再生を開始"
+              }
+              aria-pressed={isPlaying}
+            >
+              {isPlaying ? "停止" : stepIdx > 0 ? "再開" : "再生"}
             </button>
           </div>
         ) : null}

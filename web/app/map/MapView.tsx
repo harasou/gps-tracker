@@ -10,9 +10,10 @@ export const DAY_MS = 86_400_000;
 // 24時間表示で生成する丸マーカーの上限。超える分は間引く(折れ線は全点描く)。
 const MAX_FULLDAY_MARKERS = 300;
 
-// ステッパの自動再生: 点数によらず「20点を0.5秒間隔」で合計およそ10秒に揃える。
-const PLAY_STEPS = 20;
-const PLAY_INTERVAL_MS = 500;
+// ステッパの自動再生: 点数によらず「40点を0.25秒間隔」で合計およそ10秒に揃える。
+// 点と点の間はワープさせず連続的に動かすので、間隔を細かくするほど滑らかに見える。
+const PLAY_STEPS = 40;
+const PLAY_LEG_MS = 250;
 
 // windowPoints から再生用に最大 PLAY_STEPS 個を均等に間引いたインデックス列を返す。
 // 点数が PLAY_STEPS 以下ならそのまま全点を使う。
@@ -153,9 +154,9 @@ export default function MapView({
   const [expanded, setExpanded] = useState(false);
   // 枠内プロットを1点ずつ辿るステッパ。現在位置と、その点を示す赤マーカー/吹き出し。
   const [pointIdx, setPointIdx] = useState(0);
-  // 自動再生中かどうかと、そのタイマー(停止・枠切替・アンマウント時に破棄する)。
+  // 自動再生中かどうかと、そのアニメーションフレームID(停止・枠切替・アンマウント時に破棄する)。
   const [isPlaying, setIsPlaying] = useState(false);
-  const playTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playAnimRef = useRef<number | null>(null);
   const currentMarkerRef = useRef<google.maps.Marker | null>(null);
   const stepInfoRef = useRef<google.maps.InfoWindow | null>(null);
   // 直前に描画した枠。枠切替(=全体フィット)とステップ移動を区別するのに使う。
@@ -177,50 +178,70 @@ export default function MapView({
 
   // 枠が変わったらステッパを先頭へ戻し、再生中なら止める。
   useEffect(() => {
-    if (playTimerRef.current) {
-      clearInterval(playTimerRef.current);
-      playTimerRef.current = null;
+    if (playAnimRef.current !== null) {
+      cancelAnimationFrame(playAnimRef.current);
+      playAnimRef.current = null;
       setIsPlaying(false);
     }
     setPointIdx(0);
   }, [windowPoints]);
   const stepIdx = windowPoints.length ? Math.min(pointIdx, windowPoints.length - 1) : 0;
 
-  // アンマウント時に再生タイマーを破棄する。
+  // アンマウント時に再生アニメーションを破棄する。
   useEffect(() => {
     return () => {
-      if (playTimerRef.current) clearInterval(playTimerRef.current);
+      if (playAnimRef.current !== null) cancelAnimationFrame(playAnimRef.current);
     };
   }, []);
 
   // 自動再生の停止。手動でステッパを操作したときにも呼ぶ。
   function stopPlay() {
-    if (playTimerRef.current) {
-      clearInterval(playTimerRef.current);
-      playTimerRef.current = null;
+    if (playAnimRef.current !== null) {
+      cancelAnimationFrame(playAnimRef.current);
+      playAnimRef.current = null;
     }
     setIsPlaying(false);
   }
 
-  // 自動再生の開始/停止トグル。点数によらず約20点を0.5秒間隔で辿る(合計10秒程度)。
+  // 自動再生の開始/停止トグル。点数によらず約40点を均等に間引き、点と点の間は
+  // ワープさせずフレームごとに緯度経度を線形補間して動かす(1点0.25秒 × 40点
+  // ≒ 合計10秒)。実データ点が切り替わるたびに pointIdx を更新し、ステッパの
+  // 吹き出し・スライダー位置(下の別effect)はそれに追従する。
   function togglePlay() {
     if (isPlaying) {
       stopPlay();
       return;
     }
-    if (windowPoints.length === 0) return;
     const seq = samplePlayIndices(windowPoints.length, PLAY_STEPS);
-    let i = 0;
-    setPointIdx(seq[0]);
+    if (seq.length < 2) return;
     setIsPlaying(true);
-    playTimerRef.current = setInterval(() => {
-      i += 1;
-      if (i >= seq.length) {
-        stopPlay();
-        return;
+    setPointIdx(seq[0]);
+
+    let leg = 0;
+    let legStartMs: number | null = null;
+
+    const frame = (now: number) => {
+      if (legStartMs === null) legStartMs = now;
+      const a = windowPoints[seq[leg]];
+      const b = windowPoints[seq[leg + 1]];
+      const t = Math.min(1, (now - legStartMs) / PLAY_LEG_MS);
+      currentMarkerRef.current?.setPosition({
+        lat: a.lat + (b.lat - a.lat) * t,
+        lng: a.lng + (b.lng - a.lng) * t,
+      });
+
+      if (t >= 1) {
+        leg += 1;
+        legStartMs = now;
+        setPointIdx(seq[leg]);
+        if (leg >= seq.length - 1) {
+          stopPlay();
+          return;
+        }
       }
-      setPointIdx(seq[i]);
-    }, PLAY_INTERVAL_MS);
+      playAnimRef.current = requestAnimationFrame(frame);
+    };
+    playAnimRef.current = requestAnimationFrame(frame);
   }
 
   // 地図は一度だけ生成する(枠切替では作り直さない)。

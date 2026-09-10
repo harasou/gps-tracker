@@ -211,16 +211,17 @@ export default function MapView({
   }
 
   // 自動再生の開始/停止トグル。今スライダーがある点から、残りの点を約40点まで
-  // 均等に間引いて辿る。点と点の間はワープさせずフレームごとに緯度経度を線形
-  // 補間して動かす(1点0.25秒。先頭から再生すれば40点で合計およそ10秒)。
-  // 実データ点が切り替わるたびに pointIdx を更新し、ステッパの吹き出し・
-  // スライダー位置(下の別effect)はそれに追従する。
+  // 均等に間引いて辿る。末尾まで来ている(=再生し切った、または手動で末尾へ
+  // 動かした)ときは先頭からの再生とみなす。点と点の間はワープさせずフレーム
+  // ごとに緯度経度を線形補間して動かす(1点0.25秒。先頭から再生すれば40点で
+  // 合計およそ10秒)。実データ点が切り替わるたびに pointIdx を更新し、ステッパ
+  // の吹き出し・スライダー位置(下の別effect)はそれに追従する。
   function togglePlay() {
     if (isPlaying) {
       stopPlay();
       return;
     }
-    const start = stepIdx;
+    const start = stepIdx >= windowPoints.length - 1 ? 0 : stepIdx;
     const remaining = windowPoints.length - start;
     const seq = samplePlayIndices(remaining, PLAY_STEPS).map((i) => i + start);
     if (seq.length < 2) return;
@@ -262,15 +263,23 @@ export default function MapView({
       .then(() => {
         if (cancelled || !mapRef.current) return;
         const g = (window as unknown as { google: typeof google }).google;
-        const center = points.length
-          ? { lat: points[points.length - 1].lat, lng: points[points.length - 1].lng }
-          : { lat: 35.681, lng: 139.767 };
+        // 初期表示枠(windowPoints、無ければ全点)があれば、生成時点で先にその
+        // 範囲へfitBoundsしておく。あとから effect でフィットし直すと、その一瞬
+        // 前まで見えていた適当なcenter/zoomが目に入ってしまうため。
+        const initialPoints = windowPoints.length ? windowPoints : points;
         const map = new g.maps.Map(mapRef.current, {
-          center,
+          center: initialPoints.length
+            ? { lat: initialPoints[initialPoints.length - 1].lat, lng: initialPoints[initialPoints.length - 1].lng }
+            : { lat: 35.681, lng: 139.767 },
           zoom: 15,
           mapTypeControl: true,
           streetViewControl: false,
         });
+        if (initialPoints.length) {
+          const bounds = new g.maps.LatLngBounds();
+          initialPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+          map.fitBounds(bounds);
+        }
         mapObjRef.current = map;
         plotRef.current.info = new g.maps.InfoWindow();
         setMapReady(true);
@@ -281,7 +290,7 @@ export default function MapView({
     return () => {
       cancelled = true;
     };
-    // 地図生成は一度きり。points は初期センターにのみ使う。
+    // 地図生成は一度きり。points/windowPoints は初期枠にのみ使う。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
@@ -297,6 +306,13 @@ export default function MapView({
     plotRef.current.overlays.forEach((o) => o.setMap(null));
     plotRef.current.overlays = [];
     if (windowPoints.length === 0) return;
+
+    // 先にカメラを枠の範囲へ合わせる(最大ズーム制限なし)。点を追加してから
+    // fitBoundsすると、古いカメラ位置のまま新しい点が一瞬見えたあとにカメラが
+    // 動く(プロット→リサイズの順に見える)ため、順序を逆にしている。
+    const bounds = new g.maps.LatLngBounds();
+    windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+    map.fitBounds(bounds);
 
     // 3 分超の切れ目で run に分割(ギャップをまたぐ線は引かない)。
     const runs: LocationPoint[][] = [];
@@ -356,11 +372,6 @@ export default function MapView({
       });
       plotRef.current.overlays.push(marker);
     });
-
-    // 枠の点が収まるようにフィット(最大ズーム制限なし)。
-    const bounds = new g.maps.LatLngBounds();
-    windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
-    map.fitBounds(bounds);
   }, [mapReady, windowPoints, fullDay]);
 
   // ステッパの現在点を赤マーカーで強調し、時刻を吹き出しで地図に表示する。
@@ -494,17 +505,23 @@ export default function MapView({
             >
               ▶
             </button>
-            {/* 下の日時ナビの「最新」ボタンと右端が揃うよう、行内でいちばん右に置く。 */}
+            {/* 下の日時ナビの「最新」ボタンと右端が揃うよう、行内でいちばん右に置く。
+                途中で止めているときだけ「再開」、先頭・末尾(=再生し切った後)は
+                「再生」にして、押すと先頭から再生し直す。 */}
             <button
               onClick={togglePlay}
               className="shrink-0 rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
-              disabled={!isPlaying && stepIdx >= windowPoints.length - 1}
+              disabled={!isPlaying && windowPoints.length < 2}
               aria-label={
-                isPlaying ? "自動再生を停止" : stepIdx > 0 ? "自動再生を再開" : "自動再生を開始"
+                isPlaying
+                  ? "自動再生を停止"
+                  : stepIdx > 0 && stepIdx < windowPoints.length - 1
+                    ? "自動再生を再開"
+                    : "自動再生を開始"
               }
               aria-pressed={isPlaying}
             >
-              {isPlaying ? "停止" : stepIdx > 0 ? "再開" : "再生"}
+              {isPlaying ? "停止" : stepIdx > 0 && stepIdx < windowPoints.length - 1 ? "再開" : "再生"}
             </button>
           </div>
         ) : null}

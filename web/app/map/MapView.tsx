@@ -7,6 +7,9 @@ import type { LocationPoint } from "@/lib/types";
 export const SLOT_MS = 60 * 60 * 1000;
 export const DAY_MS = 86_400_000;
 
+// 24時間表示で生成する丸マーカーの上限。超える分は間引く(折れ線は全点描く)。
+const MAX_FULLDAY_MARKERS = 300;
+
 // Google Maps JS API を 1 度だけ読み込むためのローダ。
 let mapsPromise: Promise<void> | null = null;
 
@@ -231,7 +234,15 @@ export default function MapView({
       plotRef.current.overlays.push(line);
     });
 
+    // 24時間表示は点数が多く(1000点超)、丸マーカーを1点ずつ生成すると描画が
+    // 重くなるため間引く。折れ線(runs)は全点のまま描くので軌跡は欠けない。
+    // 1時間枠表示は間引かず、全点をタップしてポップアップを見られるようにする。
+    const markerStep = fullDay
+      ? Math.max(1, Math.ceil(windowPoints.length / MAX_FULLDAY_MARKERS))
+      : 1;
+
     windowPoints.forEach((p, i) => {
+      if (markerStep > 1 && i % markerStep !== 0 && i !== windowPoints.length - 1) return;
       const marker = new g.maps.Marker({
         position: { lat: p.lat, lng: p.lng },
         map,
@@ -257,7 +268,7 @@ export default function MapView({
     const bounds = new g.maps.LatLngBounds();
     windowPoints.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
     map.fitBounds(bounds);
-  }, [mapReady, windowPoints]);
+  }, [mapReady, windowPoints, fullDay]);
 
   // ステッパの現在点を赤マーカーで強調し、時刻を吹き出しで地図に表示する。
   useEffect(() => {

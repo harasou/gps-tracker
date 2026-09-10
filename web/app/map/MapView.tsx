@@ -10,8 +10,9 @@ export const DAY_MS = 86_400_000;
 // 24時間表示で生成する丸マーカーの上限。超える分は間引く(折れ線は全点描く)。
 const MAX_FULLDAY_MARKERS = 300;
 
-// ステッパの自動再生: 点数によらず「40点を0.25秒間隔」で合計およそ10秒に揃える。
-// 点と点の間はワープさせず連続的に動かすので、間隔を細かくするほど滑らかに見える。
+// ステッパの自動再生: 現在位置から残りの点を最大40点に間引き、0.25秒間隔で辿る
+// (先頭から再生すれば合計およそ10秒)。点と点の間はワープさせず連続的に動かす
+// ので、間隔を細かくするほど滑らかに見える。
 const PLAY_STEPS = 40;
 const PLAY_LEG_MS = 250;
 
@@ -157,6 +158,9 @@ export default function MapView({
   // 自動再生中かどうかと、そのアニメーションフレームID(停止・枠切替・アンマウント時に破棄する)。
   const [isPlaying, setIsPlaying] = useState(false);
   const playAnimRef = useRef<number | null>(null);
+  // 再生アニメーション中、いま画面上で最も近い実データ点のインデックス。
+  // 停止時にスライダーをこの点へスナップさせるために都度更新する。
+  const playNearestIdxRef = useRef(0);
   const currentMarkerRef = useRef<google.maps.Marker | null>(null);
   const stepInfoRef = useRef<google.maps.InfoWindow | null>(null);
   // 直前に描画した枠。枠切替(=全体フィット)とステップ移動を区別するのに使う。
@@ -195,27 +199,33 @@ export default function MapView({
   }, []);
 
   // 自動再生の停止。手動でステッパを操作したときにも呼ぶ。
+  // 再生中に止めた場合は、今画面に見えている位置に最も近い実データ点へ
+  // スライダーをスナップさせる(直前に通過した点のまま止まって見えないように)。
   function stopPlay() {
     if (playAnimRef.current !== null) {
       cancelAnimationFrame(playAnimRef.current);
       playAnimRef.current = null;
+      setPointIdx(playNearestIdxRef.current);
     }
     setIsPlaying(false);
   }
 
-  // 自動再生の開始/停止トグル。点数によらず約40点を均等に間引き、点と点の間は
-  // ワープさせずフレームごとに緯度経度を線形補間して動かす(1点0.25秒 × 40点
-  // ≒ 合計10秒)。実データ点が切り替わるたびに pointIdx を更新し、ステッパの
-  // 吹き出し・スライダー位置(下の別effect)はそれに追従する。
+  // 自動再生の開始/停止トグル。今スライダーがある点から、残りの点を約40点まで
+  // 均等に間引いて辿る。点と点の間はワープさせずフレームごとに緯度経度を線形
+  // 補間して動かす(1点0.25秒。先頭から再生すれば40点で合計およそ10秒)。
+  // 実データ点が切り替わるたびに pointIdx を更新し、ステッパの吹き出し・
+  // スライダー位置(下の別effect)はそれに追従する。
   function togglePlay() {
     if (isPlaying) {
       stopPlay();
       return;
     }
-    const seq = samplePlayIndices(windowPoints.length, PLAY_STEPS);
+    const start = stepIdx;
+    const remaining = windowPoints.length - start;
+    const seq = samplePlayIndices(remaining, PLAY_STEPS).map((i) => i + start);
     if (seq.length < 2) return;
     setIsPlaying(true);
-    setPointIdx(seq[0]);
+    playNearestIdxRef.current = seq[0];
 
     let leg = 0;
     let legStartMs: number | null = null;
@@ -229,6 +239,7 @@ export default function MapView({
         lat: a.lat + (b.lat - a.lat) * t,
         lng: a.lng + (b.lng - a.lng) * t,
       });
+      playNearestIdxRef.current = t < 0.5 ? seq[leg] : seq[leg + 1];
 
       if (t >= 1) {
         leg += 1;
@@ -450,7 +461,7 @@ export default function MapView({
             <button
               onClick={togglePlay}
               className="rounded border border-neutral-300 px-3 py-3 text-lg hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-              aria-label={isPlaying ? "自動再生を停止" : "自動再生(約10秒でひと巡り)"}
+              aria-label={isPlaying ? "自動再生を停止" : "現在位置から自動再生"}
               aria-pressed={isPlaying}
             >
               {isPlaying ? "■" : "▶"}

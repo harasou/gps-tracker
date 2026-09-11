@@ -48,6 +48,10 @@ export default function MapArea({
 
   // 24時間表示か、1時間枠表示か。
   const [fullDay, setFullDay] = useState<boolean>(initialSlotIndex === "day");
+  // 「最新」ボタンで表示中かどうか。true の間は MapView 側のステッパーを
+  // 枠の先頭ではなく最終地点(最新の点)に合わせる。他の操作(矢印/カレンダー/
+  // 時間帯選択)で明示的に別の枠を見に行ったら解除する。
+  const [pinToLatest, setPinToLatest] = useState(false);
   // 選択中の 1 時間枠(開始 ms)。URL に slot 指定があればそれ、無ければ最新点の枠。
   const [slotStartMs, setSlotStartMs] = useState<number>(
     typeof initialSlotIndex === "number" ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
@@ -111,6 +115,7 @@ export default function MapArea({
   // 取得中の連打で二重遷移しないよう、進行中は無視する。
   function navTo(d: string, slot: number | "day") {
     if (isNavigating) return;
+    setPinToLatest(false);
     const p = new URLSearchParams();
     p.set("date", d);
     p.set("slot", String(slot));
@@ -126,6 +131,7 @@ export default function MapArea({
       navTo(shiftDay(day, -1), "day");
       return;
     }
+    setPinToLatest(false);
     if (slotStartMs > dayStartMs) setSlotStartMs(slotStartMs - SLOT_MS);
     else navTo(shiftDay(day, -1), 23);
   }
@@ -136,14 +142,17 @@ export default function MapArea({
       if (day < today) navTo(shiftDay(day, 1), "day");
       return;
     }
+    setPinToLatest(false);
     if (!atLast) setSlotStartMs(slotStartMs + SLOT_MS);
     else if (!nextBlocked) navTo(shiftDay(day, 1), 0);
   }
 
   // 「更新」= 今へ。今日でなければ今日へ遷移、今日なら再取得して最新枠へ。
   // いずれも1時間枠モードに戻す(「最新」は特定の瞬間を見る操作のため)。
+  // pinToLatest を立てて、MapView のステッパーを枠の先頭ではなく最終地点に合わせる。
   function onUpdate() {
     if (isNavigating) return;
+    setPinToLatest(true);
     setFullDay(false);
     if (day === today) {
       startNavigation(() => {
@@ -174,6 +183,7 @@ export default function MapArea({
             meta={meta}
             slotStartMs={slotStartMs}
             fullDay={fullDay}
+            pinToLatest={pinToLatest}
             onPrevRange={goPrev}
             onNextRange={nextBlocked ? undefined : goNext}
           />
@@ -213,6 +223,7 @@ export default function MapArea({
         <select
           value={fullDay ? "day" : slotStartMs}
           onChange={(e) => {
+            setPinToLatest(false);
             const v = e.target.value;
             if (v === "day") {
               setFullDay(true);

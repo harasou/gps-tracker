@@ -128,6 +128,7 @@ export default function MapView({
   meta,
   slotStartMs,
   fullDay,
+  pinToLatest,
   onPrevRange,
   onNextRange,
 }: {
@@ -138,6 +139,9 @@ export default function MapView({
   slotStartMs: number;
   // true なら 1 時間枠を無視してその日の全点を表示する。
   fullDay: boolean;
+  // 「最新」ボタンで表示中かどうか。true の間、枠が変わってもステッパーは
+  // 先頭ではなく最終地点(最新の点)に合わせる。
+  pinToLatest: boolean;
   // ◀/▶ による表示範囲(日付/1時間枠)の変更。矢印キー操作から呼ぶ。
   onPrevRange?: () => void;
   onNextRange?: () => void;
@@ -180,15 +184,15 @@ export default function MapView({
     [points, slotStartMs, fullDay],
   );
 
-  // 枠が変わったらステッパを先頭へ戻し、再生中なら止める。
+  // 枠が変わったらステッパを先頭(pinToLatest 中は最終地点)へ戻し、再生中なら止める。
   useEffect(() => {
     if (playAnimRef.current !== null) {
       cancelAnimationFrame(playAnimRef.current);
       playAnimRef.current = null;
       setIsPlaying(false);
     }
-    setPointIdx(0);
-  }, [windowPoints]);
+    setPointIdx(pinToLatest ? Math.max(0, windowPoints.length - 1) : 0);
+  }, [windowPoints, pinToLatest]);
   const stepIdx = windowPoints.length ? Math.min(pointIdx, windowPoints.length - 1) : 0;
 
   // アンマウント時に再生アニメーションを破棄する。

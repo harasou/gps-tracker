@@ -48,10 +48,11 @@ export default function MapArea({
 
   // 24時間表示か、1時間枠表示か。
   const [fullDay, setFullDay] = useState<boolean>(initialSlotIndex === "day");
-  // 「最新」ボタンで表示中かどうか。true の間は MapView 側のステッパーを
-  // 枠の先頭ではなく最終地点(最新の点)に合わせる。他の操作(矢印/カレンダー/
+  // 「最新」を見ている状態かどうか。true の間は MapView 側のステッパーを
+  // 枠の先頭ではなく最終地点(最新の点)に合わせる。初回表示は slot 未指定
+  // (=最新枠)の仕様なのでここも true から始める。他の操作(矢印/カレンダー/
   // 時間帯選択)で明示的に別の枠を見に行ったら解除する。
-  const [pinToLatest, setPinToLatest] = useState(false);
+  const [pinToLatest, setPinToLatest] = useState(initialSlotIndex === undefined);
   // 選択中の 1 時間枠(開始 ms)。URL に slot 指定があればそれ、無ければ最新点の枠。
   const [slotStartMs, setSlotStartMs] = useState<number>(
     typeof initialSlotIndex === "number" ? dayStartMs + initialSlotIndex * SLOT_MS : slotOf(lastMs),
@@ -68,13 +69,16 @@ export default function MapArea({
     }
     if (initialSlotIndex === "day") {
       setFullDay(true);
+      setPinToLatest(false);
     } else if (typeof initialSlotIndex === "number") {
       setFullDay(false);
       setSlotStartMs(dayStartMs + initialSlotIndex * SLOT_MS);
+      setPinToLatest(false);
     } else {
       // slot 未指定(例:「最新」で今日へ遷移): 最新枠へ。
       setFullDay(false);
       setSlotStartMs(dayStartMs + Math.floor((lastMs - dayStartMs) / SLOT_MS) * SLOT_MS);
+      setPinToLatest(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day, initialSlotIndex]);

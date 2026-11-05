@@ -66,6 +66,7 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
     var deviceToken by remember { mutableStateOf("") }
     var intervalSec by remember { mutableStateOf("60") }
     var deviceId by remember { mutableStateOf("") }
+    var deviceIdOverride by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
 
@@ -76,6 +77,7 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
         deviceToken = s.deviceToken
         intervalSec = s.intervalSec.toString()
         deviceId = s.deviceId
+        deviceIdOverride = s.deviceIdOverride
         // 記録中に再度開いたときは「停止」ボタンを出す。
         running = s.trackingEnabled
     }
@@ -159,8 +161,15 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        OutlinedTextField(
+            value = deviceIdOverride,
+            onValueChange = { deviceIdOverride = it },
+            label = { Text("端末ID(空なら自動。過去の軌跡を引き継ぐ場合のみ入力)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
         if (deviceId.isNotBlank()) {
-            Text("端末ID: $deviceId", style = MaterialTheme.typography.bodySmall)
+            Text("使用中の端末ID: $deviceId", style = MaterialTheme.typography.bodySmall)
         }
 
         if (mapUrl.isNotBlank()) {
@@ -189,6 +198,7 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
                         serverUrl = serverUrl,
                         deviceToken = deviceToken,
                         intervalSec = intervalSec.toLongOrNull() ?: 60L,
+                        deviceIdOverride = deviceIdOverride,
                     )
                     deviceId = settingsRepo.settingsFlow.first().deviceId
                     status = "設定を保存しました。"
@@ -236,7 +246,9 @@ private fun TrackerScreen(settingsRepo: SettingsRepository) {
                                     serverUrl = serverUrl,
                                     deviceToken = deviceToken,
                                     intervalSec = intervalSec.toLongOrNull() ?: 60L,
+                                    deviceIdOverride = deviceIdOverride,
                                 )
+                                deviceId = settingsRepo.settingsFlow.first().deviceId
                                 // 再起動後も自動復帰できるよう記録中フラグを立てる。
                                 settingsRepo.setTrackingEnabled(true)
                                 LocationService.start(context)
